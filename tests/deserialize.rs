@@ -16,6 +16,37 @@ fn map() {
 }
 
 #[test]
+fn map_nested() {
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct Config {
+        user: User,
+    }
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct User {
+        name: String,
+    }
+
+    let config: Config = kisu::from_str(
+        r#"
+        {
+            user = { name = "Joe"; };
+        }
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        config,
+        Config {
+            user: User {
+                name: "Joe".to_string()
+            }
+        }
+    )
+}
+
+#[test]
 fn number() {
     let config: f32 = kisu::from_str(r#" 10.0 "#).unwrap();
 
