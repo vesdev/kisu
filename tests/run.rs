@@ -92,6 +92,27 @@ fn map() {
 }
 
 #[test]
+fn inherit() {
+    use std::collections::HashMap;
+    let mut map = HashMap::new();
+    map.insert("x".to_string(), Value::String("hello".to_owned()));
+    let mut map2 = HashMap::new();
+    map2.insert("x".to_string(), Value::String("hello".to_owned()));
+    map.insert("y".to_string(), Value::Map(map2));
+
+    assert_eval!(
+        r#"
+        {
+            x = "hello";
+            y = {
+                x;
+            };
+        }"#,
+        Value::Map(map)
+    );
+}
+
+#[test]
 fn lambda() {
     assert_eval!(
         "

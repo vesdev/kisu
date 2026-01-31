@@ -224,13 +224,21 @@ impl<'a> Parser<'a> {
 
         let mut bindings = Vec::new();
 
-        while self.check(&TokenKind::Ident) && self.check_next(&TokenKind::Assign) {
+        while self.check(&TokenKind::Ident)
+            && (self.check_next(&TokenKind::Assign) || self.check_next(&TokenKind::Semicolon))
+        {
             let name = match self.ident()? {
                 Expr::Ident(name) => name,
                 _ => unreachable!(),
             };
-            self.expect(TokenKind::Assign)?;
-            let expr = self.expr()?;
+
+            // desugar inherit syntax
+            let expr = if self.check_consume(&TokenKind::Assign).is_some() {
+                self.expr()?
+            } else {
+                Expr::Ident(name.clone())
+            };
+
             self.expect(TokenKind::Semicolon)?;
 
             bindings.push(Binding {

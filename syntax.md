@@ -4,7 +4,9 @@ number = r/[0-9]+(\.[0-9]+)?/ ;
 string = r/"([^"\\]|\\.)*"/ ;
 
 literal = number | string ;
-bind = ident "=" expr ";" ;
+
+bind = ident "=" expr ";"
+     | ident ";" ;
 
 program = expr ;
 
