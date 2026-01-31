@@ -147,3 +147,11 @@ fn lambda_currying() {
         Value::Number(5.0)
     );
 }
+
+#[test]
+fn string_concat() {
+    assert_eval!(
+        r#""Hello" + " world!""#,
+        Value::String("Hello world!".to_string())
+    );
+}

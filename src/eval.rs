@@ -113,6 +113,7 @@ fn eval_binary(
         (BinaryOp::GtEq, Value::Number(l), Value::Number(r)) => {
             Ok(Value::Number(if l >= r { 1.0 } else { 0.0 }))
         }
+        (BinaryOp::Add, Value::String(l), Value::String(r)) => Ok(Value::String(l + &r)),
         _ => Err(Error::NotImplemented(format!(
             "Binary op {:?} for values {:?} and {:?}",
             op, left, right
