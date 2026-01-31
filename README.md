@@ -9,5 +9,5 @@
 </p>
 
 <p align="center">
-A purely functional configuration language that feels imperative
+{ A purely functional configuration language }
 </p>
