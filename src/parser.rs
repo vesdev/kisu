@@ -212,13 +212,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn paren_expr(&mut self) -> Result<Expr, Error> {
-        self.expect(TokenKind::ParenL)?;
-        let expr = self.expr()?;
-        self.expect(TokenKind::ParenR)?;
-        Ok(Expr::Paren(Box::new(expr)))
-    }
-
     fn key(&mut self) -> Result<Expr, Error> {
         if let Ok(ident) = self.ident() {
             Ok(ident)
@@ -314,7 +307,6 @@ impl<'a> Parser<'a> {
                     self.ident()
                 }
             }
-            Some(TokenKind::ParenL) => self.paren_expr(),
             Some(TokenKind::BraceL) => {
                 let mut temp_parser = self.clone();
                 match temp_parser.lambda() {

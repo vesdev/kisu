@@ -197,7 +197,6 @@ pub fn eval(expr: &Expr, scope: &mut Scope) -> Result<Value, Error> {
             body: body.clone(),
             closure: scope.clone(),
         }),
-        Expr::Paren(expr) => eval(expr, scope),
         Expr::Block { bindings, expr } => eval_block(bindings, expr, scope),
         Expr::Map { bindings } => eval_map(bindings, scope),
         Expr::App { func, arg } => eval_app(func, arg, scope),

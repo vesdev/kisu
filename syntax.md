@@ -12,7 +12,6 @@ bind = key "=" expr ";"
 program = expr ;
 
 expr = ident
-     | "(" expr ")"
      | literal
      | lambda
      | named_lambda

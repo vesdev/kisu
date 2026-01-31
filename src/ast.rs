@@ -24,7 +24,6 @@ pub enum Expr {
         params: Vec<String>,
         body: Box<Expr>,
     },
-    Paren(Box<Expr>),
     Block {
         bindings: Vec<Binding>,
         expr: Box<Expr>,

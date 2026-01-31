@@ -49,7 +49,7 @@ fn complex() {
 
 #[test]
 fn paren() {
-    assert_eval!("(1 + 2) * 3", Value::Number(9.0));
+    assert_eval!("{1 + 2} * 3", Value::Number(9.0));
 }
 
 #[test]
