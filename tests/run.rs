@@ -187,6 +187,30 @@ fn lambda_currying() {
 }
 
 #[test]
+fn lambda_string_param() {
+    assert_eval!(
+        r#"
+        {
+            add = "l": "r": l + r;
+            add 5 6
+        }"#,
+        Value::Number(11.0)
+    );
+}
+
+#[test]
+fn named_lambda_string_param() {
+    assert_eval!(
+        r#"
+        {
+            add = {"l";"r"}: l + r;
+            add {l = 5; r = 6;}
+        }"#,
+        Value::Number(11.0)
+    );
+}
+
+#[test]
 fn string_concat() {
     assert_eval!(
         r#""Hello" + " world!""#,

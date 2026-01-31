@@ -212,6 +212,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn check_key(&mut self) -> bool {
+        self.check(&TokenKind::Ident) || self.check(&TokenKind::String)
+    }
+
     fn key(&mut self) -> Result<Expr, Error> {
         if let Ok(ident) = self.ident() {
             Ok(ident)
@@ -230,7 +234,7 @@ impl<'a> Parser<'a> {
 
         let mut bindings = Vec::new();
 
-        while (self.check(&TokenKind::Ident) || self.check(&TokenKind::String))
+        while self.check_key()
             && (self.check_next(&TokenKind::Assign) || self.check_next(&TokenKind::Semicolon))
         {
             let name = match self.key()? {
@@ -268,20 +272,31 @@ impl<'a> Parser<'a> {
     }
 
     fn lambda(&mut self) -> Result<Expr, Error> {
-        let params = if self.check(&TokenKind::Ident) && self.check_next(&TokenKind::Colon) {
-            let param_token = self.expect(TokenKind::Ident)?;
-            let param_name = self.source[param_token.span.start..param_token.span.end].to_string();
-            vec![param_name]
+        let params = if self.check_key() && self.check_next(&TokenKind::Colon) {
+            let token = self.key()?;
+            let name = match token {
+                Expr::String(string) => string,
+                Expr::Ident(ident) => ident,
+                _ => unreachable!(),
+            };
+            vec![name]
         } else {
             self.expect(TokenKind::BraceL)?;
             let mut params = Vec::new();
-            if let Some(param_token) = self.check_consume(&TokenKind::Ident) {
-                params.push(self.source[param_token.span.start..param_token.span.end].to_string());
+            if let Ok(token) = self.key() {
+                let name = match token {
+                    Expr::String(string) => string,
+                    Expr::Ident(ident) => ident,
+                    _ => unreachable!(),
+                };
+                params.push(name);
                 while self.check_consume(&TokenKind::Semicolon).is_some() {
-                    let param_token = self.expect(TokenKind::Ident)?;
-                    params.push(
-                        self.source[param_token.span.start..param_token.span.end].to_string(),
-                    );
+                    let name = match self.key()? {
+                        Expr::String(string) => string,
+                        Expr::Ident(ident) => ident,
+                        _ => unreachable!(),
+                    };
+                    params.push(name);
                 }
             }
             self.expect(TokenKind::BraceR)?;
@@ -299,7 +314,13 @@ impl<'a> Parser<'a> {
     fn atom(&mut self) -> Result<Expr, Error> {
         match self.token_kind() {
             Some(TokenKind::Number) => self.number(),
-            Some(TokenKind::String) => self.string(),
+            Some(TokenKind::String) => {
+                if self.check_next(&TokenKind::Colon) {
+                    self.lambda()
+                } else {
+                    self.string()
+                }
+            }
             Some(TokenKind::Ident) => {
                 if self.check_next(&TokenKind::Colon) {
                     self.lambda()
