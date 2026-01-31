@@ -7,9 +7,12 @@ use crate::{
 };
 
 pub mod ast;
+pub mod deserialize;
 pub mod eval;
 pub mod lexer;
 pub mod parser;
+
+pub use deserialize::from_str;
 
 pub fn run(source: &str) -> Result<Value, Error> {
     let lexer = Lexer::new(source);
@@ -24,5 +27,7 @@ pub enum Error {
     #[error("error parsing")]
     Parser(#[from] parser::Error),
     #[error("error evaluating")]
-    Eval(#[from] eval::Error),
+    Runtime(#[from] eval::Error),
+    #[error("deserialization error: {0}")]
+    Deserialize(#[from] deserialize::Error),
 }
