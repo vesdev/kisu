@@ -59,3 +59,20 @@ fn string() {
 
     assert_eq!(config, "Hello world!".to_string())
 }
+
+#[test]
+fn list() {
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct Config {
+        features: Vec<String>,
+    }
+
+    let config: Config = kisu::from_str(r#"{ features = [ "derive" ]; }"#).unwrap();
+
+    assert_eq!(
+        config,
+        Config {
+            features: vec!["derive".into()]
+        }
+    )
+}

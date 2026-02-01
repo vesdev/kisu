@@ -6,6 +6,7 @@ pub enum Value {
     Number(Num),
     String(Str),
     Map(HashMap<String, Value>),
+    List(Vec<Value>),
     Lambda {
         params: Vec<String>,
         body: Box<Expr>,
@@ -264,7 +265,9 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
                     ));
                 }
 
+                //TODO: detect recursion
                 self.visit_expr(&body)?;
+
                 self.closure_pop()?;
 
                 // returned value on top of stack
@@ -311,6 +314,16 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
             closure: self.closure()?.clone(),
         };
         self.stack_push(lambda);
+        Ok(())
+    }
+
+    fn visit_list(&mut self, list: &'ast ast::List) -> Result<(), Self::Err> {
+        let mut result = vec![];
+        for expr in &list.exprs {
+            self.visit_expr(expr)?;
+            result.push(self.stack_pop()?);
+        }
+        self.stack_push(Value::List(result));
         Ok(())
     }
 }

@@ -14,10 +14,10 @@ pub enum TokenKind {
     #[token("/")]
     Div,
 
-    #[token("(")]
-    ParenL,
-    #[token(")")]
-    ParenR,
+    #[token("[")]
+    BracketL,
+    #[token("]")]
+    BracketR,
     #[token("{")]
     BraceL,
     #[token("}")]

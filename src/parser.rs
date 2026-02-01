@@ -1,4 +1,4 @@
-use crate::ast::{self, BinaryOp, Binding, Expr, UnaryOp};
+use crate::ast::{self, BinaryOp, Binding, Expr, List, UnaryOp};
 use crate::lexer::{Token, TokenIter, TokenKind};
 use logos::Span;
 
@@ -274,6 +274,24 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn list(&mut self) -> Result<Expr, Error> {
+        self.expect(TokenKind::BracketL)?;
+        let mut exprs = Vec::new();
+
+        while !self.check(&TokenKind::BracketR) {
+            let expr = self.expr()?;
+            exprs.push(expr);
+            if !self.check_consume(&TokenKind::Semicolon).is_some()
+                && self.check_next(&TokenKind::BracketR)
+            {
+                break;
+            };
+        }
+
+        self.expect(TokenKind::BracketR)?;
+        Ok(Expr::List(List { exprs }))
+    }
+
     fn lambda(&mut self) -> Result<Expr, Error> {
         let params = if self.check_key() && self.check_next(&TokenKind::Colon) {
             let token = self.key()?;
@@ -331,6 +349,7 @@ impl<'a> Parser<'a> {
                     self.ident()
                 }
             }
+            Some(TokenKind::BracketL) => self.list(),
             Some(TokenKind::BraceL) => {
                 let mut temp_parser = self.clone();
                 match temp_parser.lambda() {
@@ -380,7 +399,7 @@ impl<'a> Parser<'a> {
     fn app(&mut self, mut func: Expr) -> Result<Expr, Error> {
         while let Some(token_kind) = self.token_kind() {
             match token_kind {
-                TokenKind::ParenL | TokenKind::BraceL | TokenKind::String | TokenKind::Number => {
+                TokenKind::BraceL | TokenKind::String | TokenKind::Number => {
                     let arg = self.atom()?;
                     func = Expr::App {
                         lhs: Box::new(func),

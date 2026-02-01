@@ -84,9 +84,15 @@ impl Div for Num {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct List {
+    pub exprs: Vec<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(Num),
     String(Str),
+    List(List),
     Ident(Ident),
     Unary {
         op: UnaryOp,
@@ -178,6 +184,7 @@ pub trait Visitor<'ast>: Sized {
             Expr::Map { bindings } => self.visit_map(bindings),
             Expr::App { lhs, rhs } => self.visit_app(lhs, rhs),
             Expr::Ident(ident) => self.visit_ident(ident),
+            Expr::List(list) => self.visit_list(list),
         }
     }
 
@@ -200,4 +207,5 @@ pub trait Visitor<'ast>: Sized {
     ) -> Result<(), Self::Err>;
     fn visit_app(&mut self, lhs: &'ast Expr, rhs: &'ast Expr) -> Result<(), Self::Err>;
     fn visit_lambda(&mut self, params: &'ast [String], body: &'ast Expr) -> Result<(), Self::Err>;
+    fn visit_list(&mut self, list: &'ast List) -> Result<(), Self::Err>;
 }

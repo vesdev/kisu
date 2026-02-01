@@ -62,6 +62,10 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
                 let map_deserializer = MapDeserializer::new(map);
                 visitor.visit_map(map_deserializer)
             }
+            Value::List(l) => {
+                let seq_deserializer = SeqDeserializer::new(l);
+                visitor.visit_seq(seq_deserializer)
+            }
             Value::Void => visitor.visit_unit(),
             _ => Err(de::Error::custom(format!(
                 "unsupported Value type for deserialization: {:?}",
@@ -266,11 +270,17 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         visitor.visit_newtype_struct(self)
     }
 
-    fn deserialize_seq<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        Err(de::Error::custom("sequences are not supported"))
+        match self.value {
+            Value::List(l) => {
+                let seq_deserializer = SeqDeserializer::new(l);
+                visitor.visit_seq(seq_deserializer)
+            }
+            _ => Err(de::Error::custom("expected a list")),
+        }
     }
 
     fn deserialize_tuple<V>(self, _len: usize, _visitor: V) -> Result<V::Value, Self::Error>
@@ -384,5 +394,35 @@ impl<'de> de::MapAccess<'de> for MapDeserializer<'de> {
             .take()
             .ok_or_else(|| de::Error::custom("unexpected end of map"))?;
         seed.deserialize(Deserializer::new(value))
+    }
+}
+
+struct SeqDeserializer<'de> {
+    iter: std::vec::IntoIter<Value>,
+    phantom: std::marker::PhantomData<&'de ()>,
+}
+
+impl<'de> SeqDeserializer<'de> {
+    fn new(list: Vec<Value>) -> Self {
+        SeqDeserializer {
+            iter: list.into_iter(),
+            phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<'de> de::SeqAccess<'de> for SeqDeserializer<'de> {
+    type Error = Error;
+
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
+    where
+        T: de::DeserializeSeed<'de>,
+    {
+        let value = self.iter.next();
+
+        match value {
+            Some(value) => seed.deserialize(Deserializer::new(value)).map(Some),
+            None => Ok(None),
+        }
     }
 }

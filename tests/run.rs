@@ -217,3 +217,17 @@ fn string_concat() {
         Value::String("Hello world!".into())
     );
 }
+
+#[test]
+fn list() {
+    let expected = vec![
+        Value::Number(1.0.into()),
+        Value::String("forsen".into()),
+        Value::Number(3.0.into()),
+    ];
+    assert_eval!(r#"[1; "forsen"; 3]"#, Value::List(expected));
+}
+#[test]
+fn list_empty() {
+    assert_eval!(r#"[]"#, Value::List(vec![]));
+}

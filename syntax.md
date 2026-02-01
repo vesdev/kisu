@@ -17,6 +17,7 @@ expr = ident
      | named_lambda
      | blockexpr
      | map
+     | "[" list "]"
      | unary
      | binary
      | app ;
@@ -32,5 +33,7 @@ app = expr expr ;
 block = "{" block_expr | map "}" ;
 block_expr = bind* expr ;
 map = bind* ;
+
+list = expr | expr ";" list ;
 
 ```
