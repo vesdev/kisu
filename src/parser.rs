@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Binding, Expr, UnaryOp};
+use crate::ast::{self, BinaryOp, Binding, Expr, UnaryOp};
 use crate::lexer::{Token, TokenIter, TokenKind};
 use logos::Span;
 
@@ -161,7 +161,7 @@ impl<'a> Parser<'a> {
             let value = lexeme
                 .parse::<f64>()
                 .map_err(|_| Error::InvalidNumber { span: span.clone() })?;
-            Ok(Expr::Number(value))
+            Ok(Expr::Number(value.into()))
         } else {
             Err(Error::ExpectedNumber {
                 found: self.token_kind().cloned(),
@@ -177,7 +177,7 @@ impl<'a> Parser<'a> {
 
             // remove quotes
             let content = &lexeme[1..lexeme.len() - 1];
-            Ok(Expr::String(content.to_string()))
+            Ok(Expr::String(content.into()))
         } else {
             Err(Error::ExpectedString {
                 found: self.token_kind().cloned(),
@@ -191,7 +191,9 @@ impl<'a> Parser<'a> {
             let span = token.span;
             let name = &self.source[span.start..span.end];
 
-            Ok(Expr::Ident(name.to_string()))
+            Ok(Expr::Ident(ast::Ident {
+                name: name.to_string(),
+            }))
         } else {
             Err(Error::ExpectedIdentifier {
                 found: self.token_kind().cloned(),
@@ -237,9 +239,10 @@ impl<'a> Parser<'a> {
         while self.check_key()
             && (self.check_next(&TokenKind::Assign) || self.check_next(&TokenKind::Semicolon))
         {
-            let name = match self.key()? {
+            // desugar string keys to identifiers
+            let ident = match self.key()? {
                 Expr::Ident(name) => name,
-                Expr::String(string) => string,
+                Expr::String(string) => ast::Ident { name: string.0 },
                 _ => unreachable!(),
             };
 
@@ -247,13 +250,13 @@ impl<'a> Parser<'a> {
             let expr = if self.check_consume(&TokenKind::Assign).is_some() {
                 self.expr()?
             } else {
-                Expr::Ident(name.clone())
+                Expr::Ident(ident.clone())
             };
 
             self.expect(TokenKind::Semicolon)?;
 
             bindings.push(Binding {
-                name,
+                ident,
                 expr: Box::new(expr),
             });
         }
@@ -275,8 +278,8 @@ impl<'a> Parser<'a> {
         let params = if self.check_key() && self.check_next(&TokenKind::Colon) {
             let token = self.key()?;
             let name = match token {
-                Expr::String(string) => string,
-                Expr::Ident(ident) => ident,
+                Expr::String(string) => string.0,
+                Expr::Ident(ident) => ident.name,
                 _ => unreachable!(),
             };
             vec![name]
@@ -285,15 +288,15 @@ impl<'a> Parser<'a> {
             let mut params = Vec::new();
             if let Ok(token) = self.key() {
                 let name = match token {
-                    Expr::String(string) => string,
-                    Expr::Ident(ident) => ident,
+                    Expr::String(string) => string.0,
+                    Expr::Ident(ident) => ident.name,
                     _ => unreachable!(),
                 };
                 params.push(name);
                 while self.check_consume(&TokenKind::Semicolon).is_some() {
                     let name = match self.key()? {
-                        Expr::String(string) => string,
-                        Expr::Ident(ident) => ident,
+                        Expr::String(string) => string.0,
+                        Expr::Ident(ident) => ident.name,
                         _ => unreachable!(),
                     };
                     params.push(name);
@@ -366,8 +369,8 @@ impl<'a> Parser<'a> {
 
             lhs = Expr::Binary {
                 op,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
             };
         }
 
@@ -380,8 +383,8 @@ impl<'a> Parser<'a> {
                 TokenKind::ParenL | TokenKind::BraceL | TokenKind::String | TokenKind::Number => {
                     let arg = self.atom()?;
                     func = Expr::App {
-                        func: Box::new(func),
-                        arg: Box::new(arg),
+                        lhs: Box::new(func),
+                        rhs: Box::new(arg),
                     };
                 }
                 TokenKind::Ident => {
@@ -389,8 +392,8 @@ impl<'a> Parser<'a> {
                     if !self.check_next(&TokenKind::Colon) {
                         let arg = self.atom()?;
                         func = Expr::App {
-                            func: Box::new(func),
-                            arg: Box::new(arg),
+                            lhs: Box::new(func),
+                            rhs: Box::new(arg),
                         };
                     }
                 }

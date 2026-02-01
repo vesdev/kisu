@@ -56,8 +56,8 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_f64(n),
-            Value::String(s) => visitor.visit_string(s),
+            Value::Number(n) => visitor.visit_f64(n.0),
+            Value::String(s) => visitor.visit_string(s.0),
             Value::Map(map) => {
                 let map_deserializer = MapDeserializer::new(map);
                 visitor.visit_map(map_deserializer)
@@ -75,7 +75,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_bool(n != 0.0),
+            Value::Number(n) => visitor.visit_bool(n.0 != 0.0),
             _ => Err(de::Error::custom("expected a boolean")),
         }
     }
@@ -85,7 +85,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_i8(n as i8),
+            Value::Number(n) => visitor.visit_i8(n.0 as i8),
             _ => Err(de::Error::custom("expected an i8")),
         }
     }
@@ -95,7 +95,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_i16(n as i16),
+            Value::Number(n) => visitor.visit_i16(n.0 as i16),
             _ => Err(de::Error::custom("expected an i16")),
         }
     }
@@ -105,7 +105,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_i32(n as i32),
+            Value::Number(n) => visitor.visit_i32(n.0 as i32),
             _ => Err(de::Error::custom("expected an i32")),
         }
     }
@@ -115,7 +115,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_i64(n as i64),
+            Value::Number(n) => visitor.visit_i64(n.0 as i64),
             _ => Err(de::Error::custom("expected an i64")),
         }
     }
@@ -125,7 +125,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_u8(n as u8),
+            Value::Number(n) => visitor.visit_u8(n.0 as u8),
             _ => Err(de::Error::custom("expected a u8")),
         }
     }
@@ -135,7 +135,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_u16(n as u16),
+            Value::Number(n) => visitor.visit_u16(n.0 as u16),
             _ => Err(de::Error::custom("expected a u16")),
         }
     }
@@ -145,7 +145,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_u32(n as u32),
+            Value::Number(n) => visitor.visit_u32(n.0 as u32),
             _ => Err(de::Error::custom("expected a u32")),
         }
     }
@@ -155,7 +155,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_u64(n as u64),
+            Value::Number(n) => visitor.visit_u64(n.0 as u64),
             _ => Err(de::Error::custom("expected a u64")),
         }
     }
@@ -165,7 +165,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_f32(n as f32),
+            Value::Number(n) => visitor.visit_f32(n.0 as f32),
             _ => Err(de::Error::custom("expected an f32")),
         }
     }
@@ -175,7 +175,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Number(n) => visitor.visit_f64(n),
+            Value::Number(n) => visitor.visit_f64(n.0),
             _ => Err(de::Error::custom("expected an f64")),
         }
     }
@@ -199,7 +199,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::String(s) => visitor.visit_string(s),
+            Value::String(s) => visitor.visit_string(s.0),
             _ => Err(de::Error::custom("expected a string")),
         }
     }
@@ -216,7 +216,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::String(s) => visitor.visit_bytes(s.as_bytes()),
+            Value::String(s) => visitor.visit_bytes(s.0.as_bytes()),
             _ => Err(de::Error::custom("expected a byte buffer")),
         }
     }

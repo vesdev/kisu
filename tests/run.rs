@@ -14,52 +14,52 @@ macro_rules! assert_eval {
 
 #[test]
 fn add() {
-    assert_eval!("1 + 2", Value::Number(3.0));
+    assert_eval!("1 + 2", Value::Number(3.0.into()));
 }
 
 #[test]
 fn sub() {
-    assert_eval!("5 - 2", Value::Number(3.0));
+    assert_eval!("5 - 2", Value::Number(3.0.into()));
 }
 
 #[test]
 fn mul() {
-    assert_eval!("3 * 4", Value::Number(12.0));
+    assert_eval!("3 * 4", Value::Number(12.0.into()));
 }
 
 #[test]
 fn div() {
-    assert_eval!("10 / 2", Value::Number(5.0));
+    assert_eval!("10 / 2", Value::Number(5.0.into()));
 }
 
 #[test]
 fn precedence() {
-    assert_eval!("1 + 2 * 3", Value::Number(7.0));
+    assert_eval!("1 + 2 * 3", Value::Number(7.0.into()));
 }
 
 #[test]
 fn unary() {
-    assert_eval!("-10", Value::Number(-10.0));
+    assert_eval!("-10", Value::Number((-10.0).into()));
 }
 
 #[test]
 fn complex() {
-    assert_eval!("-1 + 2 * 3", Value::Number(5.0));
+    assert_eval!("-1 + 2 * 3", Value::Number(5.0.into()));
 }
 
 #[test]
 fn paren() {
-    assert_eval!("{1 + 2} * 3", Value::Number(9.0));
+    assert_eval!("{1 + 2} * 3", Value::Number(9.0.into()));
 }
 
 #[test]
 fn string() {
-    assert_eval!(r#""hello""#, Value::String("hello".to_string()));
+    assert_eval!(r#""hello""#, Value::String("hello".into()));
 }
 
 #[test]
 fn block() {
-    assert_eval!("{ 42 }", Value::Number(42.0));
+    assert_eval!("{ 42 }", Value::Number(42.0.into()));
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn block_with_binding() {
             a = 10;
             a * 2
         }",
-        Value::Number(20.0)
+        Value::Number(20.0.into())
     );
 }
 
@@ -78,8 +78,8 @@ fn block_with_binding() {
 fn map() {
     use std::collections::HashMap;
     let mut expected = HashMap::new();
-    expected.insert("a".to_string(), Value::Number(10.0));
-    expected.insert("b".to_string(), Value::Number(20.0));
+    expected.insert("a".to_string(), Value::Number(10.0.into()));
+    expected.insert("b".to_string(), Value::Number(20.0.into()));
 
     assert_eval!(
         "
@@ -95,8 +95,8 @@ fn map() {
 fn map_string_key() {
     use std::collections::HashMap;
     let mut expected = HashMap::new();
-    expected.insert("a".to_string(), Value::Number(10.0));
-    expected.insert("b".to_string(), Value::Number(20.0));
+    expected.insert("a".to_string(), Value::Number(10.0.into()));
+    expected.insert("b".to_string(), Value::Number(20.0.into()));
 
     assert_eval!(
         r#"
@@ -112,9 +112,9 @@ fn map_string_key() {
 fn inherit() {
     use std::collections::HashMap;
     let mut map = HashMap::new();
-    map.insert("x".to_string(), Value::String("hello".to_owned()));
+    map.insert("x".to_string(), Value::String("hello".into()));
     let mut map2 = HashMap::new();
-    map2.insert("x".to_string(), Value::String("hello".to_owned()));
+    map2.insert("x".to_string(), Value::String("hello".into()));
     map.insert("y".to_string(), Value::Map(map2));
 
     assert_eval!(
@@ -133,9 +133,9 @@ fn inherit() {
 fn inherit_string_key() {
     use std::collections::HashMap;
     let mut map = HashMap::new();
-    map.insert("a b".to_string(), Value::String("hello".to_owned()));
+    map.insert("a b".to_string(), Value::String("hello".into()));
     let mut map2 = HashMap::new();
-    map2.insert("a b".to_string(), Value::String("hello".to_owned()));
+    map2.insert("a b".to_string(), Value::String("hello".into()));
     map.insert("c".to_string(), Value::Map(map2));
 
     assert_eval!(
@@ -158,7 +158,7 @@ fn lambda() {
             add_one = x: x + 1;
             add_one 2
         }",
-        Value::Number(3.0)
+        Value::Number(3.0.into())
     );
 }
 
@@ -170,7 +170,7 @@ fn named_lambda() {
             add = {l;r}: l + r;
             add {l = 2; r = 3;}
         }",
-        Value::Number(5.0)
+        Value::Number(5.0.into())
     );
 }
 
@@ -182,7 +182,7 @@ fn lambda_currying() {
             add = l: r: l + r;
             add 2 3
         }",
-        Value::Number(5.0)
+        Value::Number(5.0.into())
     );
 }
 
@@ -194,7 +194,7 @@ fn lambda_string_param() {
             add = "l": "r": l + r;
             add 5 6
         }"#,
-        Value::Number(11.0)
+        Value::Number(11.0.into())
     );
 }
 
@@ -206,7 +206,7 @@ fn named_lambda_string_param() {
             add = {"l";"r"}: l + r;
             add {l = 5; r = 6;}
         }"#,
-        Value::Number(11.0)
+        Value::Number(11.0.into())
     );
 }
 
@@ -214,6 +214,6 @@ fn named_lambda_string_param() {
 fn string_concat() {
     assert_eval!(
         r#""Hello" + " world!""#,
-        Value::String("Hello world!".to_string())
+        Value::String("Hello world!".into())
     );
 }

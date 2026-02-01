@@ -1,15 +1,15 @@
-use crate::ast::{BinaryOp, Binding, Expr, UnaryOp};
+use crate::ast::{self, BinaryOp, Binding, Expr, Num, Str, UnaryOp};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    Number(f64),
-    String(String),
+    Number(Num),
+    String(Str),
     Map(HashMap<String, Value>),
     Lambda {
         params: Vec<String>,
         body: Box<Expr>,
-        closure: Scope,
+        closure: Closure,
     },
     Void,
 }
@@ -20,185 +20,297 @@ pub enum Error {
     NotImplemented(String),
     #[error("identifier '{0}' not found")]
     IdentifierNotFound(String),
+    #[error("stack underflow")]
+    StackUnderflow,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default, Clone)]
 pub struct Scope {
-    vars: HashMap<String, Value>,
-    parent: Option<Box<Scope>>,
+    pub vars: HashMap<String, Value>,
 }
 
-impl Default for Scope {
+#[derive(Debug, PartialEq, Clone)]
+pub struct Closure {
+    scope_stack: Vec<Scope>,
+}
+
+impl Default for Closure {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Scope {
-    pub fn new() -> Self {
         Self {
-            vars: HashMap::new(),
-            parent: None,
-        }
-    }
-
-    pub fn new_child(&self) -> Self {
-        Self {
-            vars: HashMap::new(),
-            parent: Some(Box::new(self.clone())),
-        }
-    }
-
-    pub fn get(&self, name: &str) -> Option<&Value> {
-        self.vars
-            .get(name)
-            .or_else(|| self.parent.as_ref().and_then(|parent| parent.get(name)))
-    }
-
-    pub fn set(&mut self, name: String, value: Value) {
-        self.vars.insert(name, value);
-    }
-}
-
-impl Clone for Scope {
-    fn clone(&self) -> Self {
-        Self {
-            vars: self.vars.clone(),
-            parent: self.parent.clone(),
+            scope_stack: vec![Scope::default()],
         }
     }
 }
 
-fn eval_unary(op: &UnaryOp, expr: &Expr, scope: &mut Scope) -> Result<Value, Error> {
-    let val = eval(expr, scope)?;
-    match (op, val) {
-        (UnaryOp::Neg, Value::Number(n)) => Ok(Value::Number(-n)),
-        (UnaryOp::Not, Value::Number(n)) => Ok(Value::Number(if n == 0.0 { 1.0 } else { 0.0 })),
-        _ => Err(Error::NotImplemented(format!(
-            "Unary op {:?} for value {:?}",
-            op, expr
-        ))),
+impl Closure {
+    #[inline]
+    fn scope_get(&self, name: &str) -> Result<&Value, Error> {
+        self.scope_stack
+            .iter()
+            .rev()
+            .find_map(|scope| scope.vars.get(name))
+            .ok_or(Error::IdentifierNotFound(name.to_owned()))
+    }
+
+    #[inline]
+    fn scope_insert(&mut self, key: String, value: Value) -> Result<(), Error> {
+        let scope = self.scope_stack.last_mut().ok_or(Error::StackUnderflow)?;
+        scope.vars.insert(key, value);
+        Ok(())
+    }
+
+    #[inline]
+    fn scope_push(&mut self) {
+        self.scope_stack.push(Scope::default());
+    }
+
+    #[inline]
+    fn scope_pop(&mut self) -> Result<(), Error> {
+        self.scope_stack.pop().ok_or(Error::StackUnderflow)?;
+        Ok(())
     }
 }
 
-fn eval_binary(
-    op: &BinaryOp,
-    left: &Expr,
-    right: &Expr,
-    scope: &mut Scope,
-) -> Result<Value, Error> {
-    let left_val = eval(left, scope)?;
-    let right_val = eval(right, scope)?;
-    match (op, left_val, right_val) {
-        (BinaryOp::Add, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
-        (BinaryOp::Sub, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l - r)),
-        (BinaryOp::Mul, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l * r)),
-        (BinaryOp::Div, Value::Number(l), Value::Number(r)) => {
-            if r == 0.0 {
-                return Err(Error::NotImplemented("Division by zero".to_string()));
+pub struct TreeWalker {
+    call_stack: Vec<Closure>,
+    stack: Vec<Value>,
+}
+
+impl Default for TreeWalker {
+    fn default() -> Self {
+        Self {
+            call_stack: vec![Closure::default()],
+            stack: Default::default(),
+        }
+    }
+}
+
+impl TreeWalker {
+    pub fn consume(mut self) -> Result<Value, Error> {
+        self.stack_pop()
+    }
+
+    #[inline]
+    fn closure(&mut self) -> Result<&Closure, Error> {
+        self.call_stack.last().ok_or(Error::StackUnderflow)
+    }
+
+    #[inline]
+    fn closure_mut(&mut self) -> Result<&mut Closure, Error> {
+        self.call_stack.last_mut().ok_or(Error::StackUnderflow)
+    }
+
+    #[inline]
+    fn closure_push(&mut self, closure: Closure) {
+        self.call_stack.push(closure)
+    }
+
+    #[inline]
+    fn closure_pop(&mut self) -> Result<Closure, Error> {
+        self.call_stack.pop().ok_or(Error::StackUnderflow)
+    }
+
+    #[inline]
+    fn stack_push(&mut self, value: Value) {
+        self.stack.push(value)
+    }
+
+    #[inline]
+    fn stack_pop(&mut self) -> Result<Value, Error> {
+        self.stack.pop().ok_or(Error::StackUnderflow)
+    }
+}
+
+impl<'ast> ast::Visitor<'ast> for TreeWalker {
+    type Err = Error;
+
+    fn visit_ident(&mut self, ident: &'ast ast::Ident) -> Result<(), Self::Err> {
+        let value = self.closure_mut()?.scope_get(&ident.name)?.clone();
+        self.stack_push(value);
+        Ok(())
+    }
+
+    fn visit_bind(&mut self, bind: &'ast Binding) -> Result<(), Self::Err> {
+        self.visit_expr(&bind.expr)?;
+        let value = self.stack_pop()?;
+        self.closure_mut()?
+            .scope_insert(bind.ident.name.clone(), value.clone())?;
+        Ok(())
+    }
+
+    fn visit_num(&mut self, num: &'ast Num) -> Result<(), Self::Err> {
+        self.stack_push(Value::Number(*num));
+        Ok(())
+    }
+
+    fn visit_str(&mut self, str: &'ast Str) -> Result<(), Self::Err> {
+        self.stack_push(Value::String(str.clone()));
+        Ok(())
+    }
+
+    fn visit_unary_op(&mut self, op: &'ast UnaryOp, expr: &'ast Expr) -> Result<(), Self::Err> {
+        self.visit_expr(expr)?;
+        let val = self.stack_pop()?;
+
+        let result = match (op, val) {
+            (UnaryOp::Neg, Value::Number(n)) => Ok(Value::Number((-n.0).into())),
+            (UnaryOp::Not, Value::Number(n)) => {
+                Ok(Value::Number(if n.0 == 0.0 { 1.0 } else { 0.0 }.into()))
             }
-            Ok(Value::Number(l / r))
-        }
-        (BinaryOp::Eq, l, r) => Ok(Value::Number(if l == r { 1.0 } else { 0.0 })),
-        (BinaryOp::NotEq, l, r) => Ok(Value::Number(if l != r { 1.0 } else { 0.0 })),
-        (BinaryOp::Lt, Value::Number(l), Value::Number(r)) => {
-            Ok(Value::Number(if l < r { 1.0 } else { 0.0 }))
-        }
-        (BinaryOp::Gt, Value::Number(l), Value::Number(r)) => {
-            Ok(Value::Number(if l > r { 1.0 } else { 0.0 }))
-        }
-        (BinaryOp::LtEq, Value::Number(l), Value::Number(r)) => {
-            Ok(Value::Number(if l <= r { 1.0 } else { 0.0 }))
-        }
-        (BinaryOp::GtEq, Value::Number(l), Value::Number(r)) => {
-            Ok(Value::Number(if l >= r { 1.0 } else { 0.0 }))
-        }
-        (BinaryOp::Add, Value::String(l), Value::String(r)) => Ok(Value::String(l + &r)),
-        _ => Err(Error::NotImplemented(format!(
-            "Binary op {:?} for values {:?} and {:?}",
-            op, left, right
-        ))),
+            _ => Err(Error::NotImplemented(format!(
+                "Unary op {:?} for value {:?}",
+                op, expr
+            ))),
+        };
+
+        self.stack_push(result?);
+        Ok(())
     }
-}
 
-fn eval_block(bindings: &[Binding], expr: &Expr, scope: &mut Scope) -> Result<Value, Error> {
-    let mut block_scope = scope.new_child();
-    for binding in bindings {
-        let value = eval(&binding.expr, &mut block_scope)?;
-        block_scope.set(binding.name.clone(), value);
-    }
-    eval(expr, &mut block_scope)
-}
+    fn visit_binary_op(
+        &mut self,
+        op: &'ast BinaryOp,
+        lhs: &'ast Expr,
+        rhs: &'ast Expr,
+    ) -> Result<(), Self::Err> {
+        self.visit_expr(lhs)?;
+        self.visit_expr(rhs)?;
+        let right_val = self.stack_pop()?;
+        let left_val = self.stack_pop()?;
 
-fn eval_map(bindings: &[Binding], scope: &mut Scope) -> Result<Value, Error> {
-    let mut map = HashMap::new();
-    let mut map_scope = scope.new_child();
-    for binding in bindings {
-        let value = eval(&binding.expr, &mut map_scope)?;
-        map_scope.set(binding.name.clone(), value.clone());
-        map.insert(binding.name.clone(), value);
-    }
-    Ok(Value::Map(map))
-}
-
-fn eval_app(func: &Expr, arg: &Expr, scope: &mut Scope) -> Result<Value, Error> {
-    let func_val = eval(func, scope)?;
-    let arg_val = eval(arg, scope)?;
-
-    match func_val {
-        Value::Lambda {
-            params,
-            body,
-            closure,
-        } => {
-            let mut call_scope = closure.new_child();
-
-            if params.len() == 1 {
-                call_scope.set(params[0].clone(), arg_val);
-            } else if params.is_empty() {
-            } else if let Value::Map(arg_map) = arg_val {
-                for p in params {
-                    if let Some(val) = arg_map.get(&p) {
-                        call_scope.set(p.clone(), val.clone());
-                    } else {
-                        return Err(Error::NotImplemented(format!(
-                            "Missing argument '{}' for lambda",
-                            p
-                        )));
-                    }
+        let result = match (op, left_val, right_val) {
+            (BinaryOp::Add, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
+            (BinaryOp::Sub, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l - r)),
+            (BinaryOp::Mul, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l * r)),
+            (BinaryOp::Div, Value::Number(l), Value::Number(r)) => {
+                if r.0 == 0.0 {
+                    return Err(Error::NotImplemented("Division by zero".to_string()));
                 }
-            } else {
-                return Err(Error::NotImplemented(
-                    "Multi-parameter lambda expects a map as argument".to_string(),
-                ));
+                Ok(Value::Number(l / r))
             }
+            (BinaryOp::Eq, l, r) => Ok(Value::Number(if l == r { 1.0 } else { 0.0 }.into())),
+            (BinaryOp::NotEq, l, r) => Ok(Value::Number(if l != r { 1.0 } else { 0.0 }.into())),
+            (BinaryOp::Lt, Value::Number(l), Value::Number(r)) => {
+                Ok(Value::Number(if l < r { 1.0 } else { 0.0 }.into()))
+            }
+            (BinaryOp::Gt, Value::Number(l), Value::Number(r)) => {
+                Ok(Value::Number(if l > r { 1.0 } else { 0.0 }.into()))
+            }
+            (BinaryOp::LtEq, Value::Number(l), Value::Number(r)) => {
+                Ok(Value::Number(if l <= r { 1.0 } else { 0.0 }.into()))
+            }
+            (BinaryOp::GtEq, Value::Number(l), Value::Number(r)) => {
+                Ok(Value::Number(if l >= r { 1.0 } else { 0.0 }.into()))
+            }
+            (BinaryOp::Add, Value::String(l), Value::String(r)) => Ok(Value::String(l + r)),
+            _ => Err(Error::NotImplemented(format!(
+                "Binary op {:?} for values {:?} and {:?}",
+                op, lhs, rhs
+            ))),
+        };
 
-            eval(&body, &mut call_scope)
-        }
-        _ => Err(Error::NotImplemented(format!(
-            "Cannot call value of type {:?}",
-            func_val
-        ))),
+        self.stack_push(result?);
+        Ok(())
     }
-}
 
-pub fn eval(expr: &Expr, scope: &mut Scope) -> Result<Value, Error> {
-    match expr {
-        Expr::Number(n) => Ok(Value::Number(*n)),
-        Expr::String(s) => Ok(Value::String(s.clone())),
-        Expr::Ident(name) => scope
-            .get(name)
-            .cloned()
-            .ok_or_else(|| Error::IdentifierNotFound(name.clone())),
-        Expr::Unary { op, expr } => eval_unary(op, expr, scope),
-        Expr::Binary { op, left, right } => eval_binary(op, left, right, scope),
-        Expr::Lambda { params, body } => Ok(Value::Lambda {
-            params: params.clone(),
-            body: body.clone(),
-            closure: scope.clone(),
-        }),
-        Expr::Block { bindings, expr } => eval_block(bindings, expr, scope),
-        Expr::Map { bindings } => eval_map(bindings, scope),
-        Expr::App { func, arg } => eval_app(func, arg, scope),
+    fn visit_map(&mut self, bindings: &'ast [Binding]) -> Result<(), Self::Err> {
+        let mut map = HashMap::new();
+        self.closure_mut()?.scope_push();
+
+        for binding in bindings {
+            self.visit_bind(binding)?;
+            let value = self.closure()?.scope_get(&binding.ident.name)?;
+            map.insert(binding.ident.name.clone(), value.clone());
+        }
+        self.closure_mut()?.scope_pop()?;
+        self.stack_push(Value::Map(map));
+        Ok(())
+    }
+
+    fn visit_app(&mut self, lhs: &'ast Expr, rhs: &'ast Expr) -> Result<(), Self::Err> {
+        self.visit_expr(lhs)?;
+        self.visit_expr(rhs)?;
+        let arg_val = self.stack_pop()?;
+        let func_val = self.stack_pop()?;
+
+        let result = match func_val {
+            Value::Lambda {
+                params,
+                body,
+                closure,
+            } => {
+                self.closure_push(closure);
+
+                self.closure_mut()?.scope_push();
+
+                if params.len() == 1 {
+                    self.closure_mut()?
+                        .scope_insert(params[0].clone(), arg_val)?;
+                } else if params.is_empty() {
+                } else if let Value::Map(arg_map) = arg_val {
+                    for p in params {
+                        if let Some(val) = arg_map.get(&p) {
+                            self.closure_mut()?.scope_insert(p.clone(), val.clone())?;
+                        } else {
+                            return Err(Error::NotImplemented(format!(
+                                "Missing argument '{}' for lambda",
+                                p
+                            )));
+                        }
+                    }
+                } else {
+                    return Err(Error::NotImplemented(
+                        "Multi-parameter lambda expects a map as argument".to_string(),
+                    ));
+                }
+
+                self.visit_expr(&body)?;
+                self.closure_pop()?;
+
+                // returned value on top of stack
+                self.stack_pop()
+            }
+            _ => Err(Error::NotImplemented(format!(
+                "Cannot call value of type {:?}",
+                func_val
+            ))),
+        };
+
+        self.stack_push(result?);
+        Ok(())
+    }
+
+    fn visit_block_expr(
+        &mut self,
+        bindings: &'ast [Binding],
+        expr: &'ast Expr,
+    ) -> Result<(), Self::Err> {
+        self.closure_mut()?.scope_push();
+        for binding in bindings {
+            self.visit_bind(binding)?;
+            let value = self.closure()?.scope_get(&binding.ident.name)?.clone();
+            self.closure_mut()?
+                .scope_insert(binding.ident.name.clone(), value)?;
+        }
+
+        self.visit_expr(expr)?;
+        let value = self.stack_pop()?;
+
+        self.closure_mut()?.scope_pop()?;
+
+        self.stack_push(value);
+        Ok(())
+    }
+
+    fn visit_lambda(&mut self, params: &'ast [String], body: &'ast Expr) -> Result<(), Self::Err> {
+        let lambda = Value::Lambda {
+            params: params.to_vec(),
+            body: Box::new(body.clone()),
+            // TODO: only clone used values from parent scope
+            // this is fairly expensive
+            closure: self.closure()?.clone(),
+        };
+        self.stack_push(lambda);
+        Ok(())
     }
 }

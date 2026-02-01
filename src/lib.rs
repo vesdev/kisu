@@ -1,10 +1,6 @@
 use logos::Lexer;
 
-use crate::{
-    eval::{Scope, Value},
-    lexer::TokenIter,
-    parser::Parser,
-};
+use crate::{ast::Visitor, eval::Value, lexer::TokenIter, parser::Parser};
 
 pub mod ast;
 pub mod deserialize;
@@ -18,8 +14,9 @@ pub fn run(source: &str) -> Result<Value, Error> {
     let lexer = Lexer::new(source);
     let mut parser = Parser::new(TokenIter::from(lexer), source);
     let expr = parser.parse()?;
-    let mut env = Scope::new();
-    Ok(eval::eval(&expr, &mut env)?)
+    let mut walker = eval::TreeWalker::default();
+    walker.visit_expr(&expr)?;
+    Ok(walker.consume()?)
 }
 
 #[derive(thiserror::Error, Debug, PartialEq)]
