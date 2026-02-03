@@ -14,6 +14,12 @@ pub struct Binding {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub ident: Ident,
+    pub expr: Option<Box<Expr>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Str(pub String);
 
 impl From<&str> for Str {
@@ -108,7 +114,7 @@ pub enum Expr {
         ident: Ident,
     },
     Lambda {
-        params: Vec<String>,
+        params: Vec<Param>,
         body: Box<Expr>,
     },
     Block {
@@ -214,7 +220,7 @@ pub trait Visitor<'ast>: Sized {
         expr: &'ast Expr,
     ) -> Result<(), Self::Err>;
     fn visit_app(&mut self, lhs: &'ast Expr, rhs: &'ast Expr) -> Result<(), Self::Err>;
-    fn visit_lambda(&mut self, params: &'ast [String], body: &'ast Expr) -> Result<(), Self::Err>;
+    fn visit_lambda(&mut self, params: &'ast [Param], body: &'ast Expr) -> Result<(), Self::Err>;
     fn visit_list(&mut self, list: &'ast List) -> Result<(), Self::Err>;
     fn visit_map_access(&mut self, expr: &'ast Expr, ident: &'ast Ident) -> Result<(), Self::Err>;
 }

@@ -5,17 +5,14 @@ string = r/"([^"\\]|\\.)*"/ ;
 
 literal = number | string ;
 
-key = ident | string ;
-bind = key "=" expr ";"
-     | key ";" ;
 
 program = expr ;
 
 expr = ident
      | literal
      | lambda
-     | named_lambda
-     | blockexpr
+     | lambda
+     | block
      | map
      | "[" list "]"
      | unary
@@ -25,15 +22,16 @@ expr = ident
 binary = expr ("+" | "-" | "*" | "/" | "==" | "!=" | "<" | ">" | "<=" | ">=" | ".") expr ;
 unary = ("-" | "!" ) expr ;
 
-lambda = ident ":" expr ;
-named_lambda = "{" ident (";" ident)* "}" ":" expr ;
-
 app = expr expr ;
+key = ident | string ;
 
-block = "{" block_expr | map "}" ;
-block_expr = bind* expr ;
-map = bind* ;
+bind = key "=" expr ";"
+     | key ";" ;
 
+lambda = "{" bind* "}" ":" expr ;
+
+block = "(" bind* expr ")" ;
+map = "{" bind* "}" ;
 list = expr | expr ";" list ;
 
 ```

@@ -1,4 +1,4 @@
-use crate::ast::{self, BinaryOp, Binding, Expr, Num, Str, UnaryOp};
+use crate::ast::{self, BinaryOp, Binding, Expr, Num, Param, Str, UnaryOp};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -307,13 +307,25 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         Ok(())
     }
 
-    fn visit_lambda(&mut self, params: &'ast [String], body: &'ast Expr) -> Result<(), Self::Err> {
+    fn visit_lambda(&mut self, params: &'ast [Param], body: &'ast Expr) -> Result<(), Self::Err> {
+        // TODO: only clone used values from parent scope
+        // this is fairly expensive
+        let mut closure = self.closure()?.clone();
+        let mut names = vec![];
+
+        for param in params {
+            names.push(param.ident.name.clone());
+            if let Some(default) = &param.expr {
+                self.visit_expr(default)?;
+                let default = self.stack_pop()?;
+                closure.scope_insert(param.ident.name.clone(), default)?;
+            }
+        }
+
         let lambda = Value::Lambda {
-            params: params.to_vec(),
+            params: names,
             body: Box::new(body.clone()),
-            // TODO: only clone used values from parent scope
-            // this is fairly expensive
-            closure: self.closure()?.clone(),
+            closure,
         };
         self.stack_push(lambda);
         Ok(())

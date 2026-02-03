@@ -1,4 +1,4 @@
-use crate::ast::{self, BinaryOp, Binding, Expr, List, UnaryOp};
+use crate::ast::{self, BinaryOp, Binding, Expr, Ident, List, Param, UnaryOp};
 use crate::lexer::{Token, TokenIter, TokenKind};
 use logos::Span;
 
@@ -37,8 +37,6 @@ pub enum Error {
 pub struct Parser<'a> {
     source: &'a str,
     tokens: TokenIter<'a>,
-    // NOTE: could use larger lookahead than LL(2)?
-    // to disambiguate named lambdas from other blocks
     current_token: Option<Token>,
     next_token: Option<Token>,
 }
@@ -219,11 +217,11 @@ impl<'a> Parser<'a> {
         self.check(&TokenKind::Ident) || self.check(&TokenKind::String)
     }
 
-    fn key(&mut self) -> Result<Expr, Error> {
-        if let Ok(ident) = self.ident() {
+    fn key(&mut self) -> Result<Ident, Error> {
+        if let Ok(Expr::Ident(ident)) = self.ident() {
             Ok(ident)
-        } else if let Ok(string) = self.string() {
-            Ok(string)
+        } else if let Ok(Expr::String(str)) = self.string() {
+            Ok(Ident { name: str.0 })
         } else {
             Err(Error::ExpectedIdentifier {
                 found: self.token_kind().cloned(),
@@ -233,46 +231,96 @@ impl<'a> Parser<'a> {
     }
 
     fn block(&mut self) -> Result<Expr, Error> {
-        self.expect(TokenKind::BraceL)?;
+        self.expect(TokenKind::ParenL)?;
 
         let mut bindings = Vec::new();
 
         while self.check_key()
             && (self.check_next(&TokenKind::Assign) || self.check_next(&TokenKind::Semicolon))
         {
-            // desugar string keys to identifiers
-            let ident = match self.key()? {
-                Expr::Ident(name) => name,
-                Expr::String(string) => ast::Ident { name: string.0 },
-                _ => unreachable!(),
-            };
+            let key = self.key()?;
 
             // desugar inherit syntax
             let expr = if self.check_consume(&TokenKind::Assign).is_some() {
                 self.expr()?
             } else {
-                Expr::Ident(ident.clone())
+                Expr::Ident(key.clone())
             };
 
             self.expect(TokenKind::Semicolon)?;
 
             bindings.push(Binding {
-                ident,
+                ident: key,
                 expr: Box::new(expr),
             });
         }
 
-        if self.check_consume(&TokenKind::BraceR).is_some() {
-            return Ok(Expr::Map { bindings });
-        }
-
         let expr = self.expr()?;
-        self.expect(TokenKind::BraceR)?;
+        self.expect(TokenKind::ParenR)?;
 
         Ok(Expr::Block {
             bindings,
             expr: Box::new(expr),
         })
+    }
+
+    fn map_and_lambda(&mut self) -> Result<Expr, Error> {
+        self.expect(TokenKind::BraceL)?;
+
+        let mut fields = Vec::new();
+        let mut trailing_semicolon = true;
+
+        while self.check_key() {
+            let key = self.key()?;
+            let expr = if self.check_consume(&TokenKind::Assign).is_some() {
+                Some(Box::new(self.expr()?))
+            } else {
+                None
+            };
+
+            fields.push(Param { ident: key, expr });
+
+            if self.check_consume(&TokenKind::Semicolon).is_some() {
+                trailing_semicolon = true;
+            } else {
+                trailing_semicolon = false;
+                if self.check(&TokenKind::BraceR) || self.check(&TokenKind::Colon) {
+                    break;
+                } else {
+                    return Err(Error::UnexpectedToken {
+                        expected: TokenKind::Semicolon,
+                        found: self.token_kind().cloned(),
+                        span: self.token_span(),
+                    });
+                }
+            }
+        }
+
+        self.expect(TokenKind::BraceR)?;
+        if self.check_consume(&TokenKind::Colon).is_some() {
+            let body = self.expr()?;
+            Ok(Expr::Lambda {
+                params: fields,
+                body: Box::new(body),
+            })
+        } else {
+            if !fields.is_empty() && !trailing_semicolon {
+                return Err(Error::UnexpectedToken {
+                    expected: TokenKind::Semicolon,
+                    found: self.token_kind().cloned(),
+                    span: self.token_span(),
+                });
+            }
+            Ok(Expr::Map {
+                bindings: fields
+                    .into_iter()
+                    .map(|f| Binding {
+                        ident: f.ident.clone(),
+                        expr: f.expr.unwrap_or_else(|| Box::new(Expr::Ident(f.ident))),
+                    })
+                    .collect(),
+            })
+        }
     }
 
     fn list(&mut self) -> Result<Expr, Error> {
@@ -293,74 +341,14 @@ impl<'a> Parser<'a> {
         Ok(Expr::List(List { exprs }))
     }
 
-    fn lambda(&mut self) -> Result<Expr, Error> {
-        let params = if self.check_key() && self.check_next(&TokenKind::Colon) {
-            let token = self.key()?;
-            let name = match token {
-                Expr::String(string) => string.0,
-                Expr::Ident(ident) => ident.name,
-                _ => unreachable!(),
-            };
-            vec![name]
-        } else {
-            self.expect(TokenKind::BraceL)?;
-            let mut params = Vec::new();
-            if let Ok(token) = self.key() {
-                let name = match token {
-                    Expr::String(string) => string.0,
-                    Expr::Ident(ident) => ident.name,
-                    _ => unreachable!(),
-                };
-                params.push(name);
-                while self.check_consume(&TokenKind::Semicolon).is_some() {
-                    let name = match self.key()? {
-                        Expr::String(string) => string.0,
-                        Expr::Ident(ident) => ident.name,
-                        _ => unreachable!(),
-                    };
-                    params.push(name);
-                }
-            }
-            self.expect(TokenKind::BraceR)?;
-            params
-        };
-
-        self.expect(TokenKind::Colon)?;
-        let body = self.expr()?;
-        Ok(Expr::Lambda {
-            params,
-            body: Box::new(body),
-        })
-    }
-
     fn atom(&mut self) -> Result<Expr, Error> {
         match self.token_kind() {
             Some(TokenKind::Number) => self.number(),
-            Some(TokenKind::String) => {
-                if self.check_next(&TokenKind::Colon) {
-                    self.lambda()
-                } else {
-                    self.string()
-                }
-            }
-            Some(TokenKind::Ident) => {
-                if self.check_next(&TokenKind::Colon) {
-                    self.lambda()
-                } else {
-                    self.ident()
-                }
-            }
+            Some(TokenKind::String) => self.string(),
+            Some(TokenKind::Ident) => self.ident(),
             Some(TokenKind::BracketL) => self.list(),
-            Some(TokenKind::BraceL) => {
-                let mut temp_parser = self.clone();
-                match temp_parser.lambda() {
-                    Ok(expr @ Expr::Lambda { .. }) => {
-                        *self = temp_parser;
-                        Ok(expr)
-                    }
-                    _ => self.block(),
-                }
-            }
+            Some(TokenKind::ParenL) => self.block(),
+            Some(TokenKind::BraceL) => self.map_and_lambda(),
             _ => Err(Error::UnexpectedToken {
                 expected: self.token_kind().unwrap_or(&TokenKind::None).clone(),
                 found: self.token_kind().cloned(),
@@ -386,15 +374,11 @@ impl<'a> Parser<'a> {
             self.consume();
 
             if op == BinaryOp::Dot {
-                let ident = match self.key()? {
-                    Expr::Ident(name) => Ok(name),
-                    Expr::String(string) => Ok(ast::Ident { name: string.0 }),
-                    _ => unreachable!(),
-                }?;
+                let key = self.key()?;
 
                 lhs = Expr::MapAccess {
                     expr: Box::new(lhs),
-                    ident,
+                    ident: key,
                 };
             } else {
                 let rhs = self.binary_expr(precedence + 1)?;

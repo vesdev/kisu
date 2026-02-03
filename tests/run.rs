@@ -48,8 +48,8 @@ fn complex() {
 }
 
 #[test]
-fn paren() {
-    assert_eval!("{1 + 2} * 3", Value::Number(9.0.into()));
+fn block() {
+    assert_eval!("(1 + 2) * 3", Value::Number(9.0.into()));
 }
 
 #[test]
@@ -58,18 +58,13 @@ fn string() {
 }
 
 #[test]
-fn block() {
-    assert_eval!("{ 42 }", Value::Number(42.0.into()));
-}
-
-#[test]
 fn block_with_binding() {
     assert_eval!(
         "
-        {
+        (
             a = 10;
             a * 2
-        }",
+        )",
         Value::Number(20.0.into())
     );
 }
@@ -95,10 +90,10 @@ fn map() {
 fn map_access() {
     assert_eval!(
         "
-        {
+        (
             map = { a = 5; };
             map.a
-        }",
+        )",
         Value::Number(5.0.into())
     );
 }
@@ -166,22 +161,10 @@ fn inherit_string_key() {
 fn lambda() {
     assert_eval!(
         "
-        {
-            add_one = x: x + 1;
-            add_one 2
-        }",
-        Value::Number(3.0.into())
-    );
-}
-
-#[test]
-fn named_lambda() {
-    assert_eval!(
-        "
-        {
+        (
             add = {l;r}: l + r;
             add {l = 2; r = 3;}
-        }",
+        )",
         Value::Number(5.0.into())
     );
 }
@@ -190,10 +173,10 @@ fn named_lambda() {
 fn lambda_currying() {
     assert_eval!(
         "
-        {
-            add = l: r: l + r;
+        (
+            add = {l}: {r}: l + r;
             add 2 3
-        }",
+        )",
         Value::Number(5.0.into())
     );
 }
@@ -202,22 +185,10 @@ fn lambda_currying() {
 fn lambda_string_param() {
     assert_eval!(
         r#"
-        {
-            add = "l": "r": l + r;
+        (
+            add = {"l"}: {"r"}: l + r;
             add 5 6
-        }"#,
-        Value::Number(11.0.into())
-    );
-}
-
-#[test]
-fn named_lambda_string_param() {
-    assert_eval!(
-        r#"
-        {
-            add = {"l";"r"}: l + r;
-            add {l = 5; r = 6;}
-        }"#,
+        )"#,
         Value::Number(11.0.into())
     );
 }
