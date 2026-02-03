@@ -1,4 +1,5 @@
 use logos::Lexer;
+use miette::Diagnostic;
 
 use crate::{ast::Visitor, eval::Value, lexer::TokenIter, parser::Parser};
 
@@ -10,7 +11,14 @@ pub mod parser;
 
 pub use deserialize::from_str;
 
-pub fn run(source: &str) -> Result<Value, Error> {
+/// run kisu program with pretty printed errors
+pub fn run(source: &str) -> Result<Value, miette::Error> {
+    let source = String::from(source);
+    eval(&source).map_err(|error| miette::Error::new(error).with_source_code(source))
+}
+
+/// run kisu program with internal error type
+pub fn eval(source: &str) -> Result<Value, Error> {
     let lexer = Lexer::new(source);
     let mut parser = Parser::new(TokenIter::from(lexer), source);
     let expr = parser.parse()?;
@@ -19,12 +27,15 @@ pub fn run(source: &str) -> Result<Value, Error> {
     Ok(walker.consume()?)
 }
 
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Diagnostic, Debug)]
 pub enum Error {
-    #[error("error parsing")]
+    #[error(transparent)]
+    #[diagnostic(transparent)]
     Parser(#[from] parser::Error),
-    #[error("error evaluating")]
+    #[error(transparent)]
+    #[diagnostic(transparent)]
     Runtime(#[from] eval::Error),
-    #[error("deserialization error: {0}")]
+    #[error(transparent)]
+    #[diagnostic(transparent)]
     Deserialize(#[from] deserialize::Error),
 }

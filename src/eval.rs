@@ -1,3 +1,5 @@
+use miette::Diagnostic;
+
 use crate::ast::{self, BinaryOp, Binding, Expr, Num, Param, Str, UnaryOp};
 use std::collections::HashMap;
 
@@ -15,7 +17,7 @@ pub enum Value {
     Void,
 }
 
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Diagnostic, Debug, PartialEq)]
 pub enum Error {
     #[error("feature not implemented")]
     NotImplemented(String),

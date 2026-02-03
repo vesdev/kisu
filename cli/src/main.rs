@@ -1,3 +1,4 @@
+use miette::Result;
 use std::path::PathBuf;
 
 use argh::FromArgs;
@@ -12,11 +13,11 @@ struct Args {
     code: Option<String>,
 }
 
-fn main() -> eyre::Result<()> {
+fn main() -> Result<()> {
     let args: Args = argh::from_env();
 
     if let Some(path) = args.path {
-        let src = std::fs::read_to_string(path)?;
+        let src = std::fs::read_to_string(path).map_err(|e| miette::miette!(e.to_string()))?;
         let result = kisu::run(&src);
         println!("{result:?}");
     }

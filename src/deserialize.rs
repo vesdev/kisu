@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
+use miette::Diagnostic;
 use serde::de::{self, DeserializeOwned, IntoDeserializer, Visitor};
 
 use crate::{deserialize, eval::Value, run};
 
-pub fn from_str<T>(source: &str) -> Result<T, crate::Error>
+pub fn from_str<T>(source: &str) -> Result<T, miette::Error>
 where
     T: DeserializeOwned,
 {
@@ -13,7 +14,8 @@ where
     Ok(T::deserialize(deserializer)?)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Diagnostic, Debug, PartialEq)]
+#[diagnostic()]
 pub enum Error {
     Message(String),
 }

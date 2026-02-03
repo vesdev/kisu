@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 argh = "0.1.13"
-eyre = "0.6.12"
+miette = { version = "7.2.0", features = ["fancy"] }
 kisu = { path = "../" }

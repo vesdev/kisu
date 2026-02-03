@@ -2,43 +2,87 @@ use crate::ast::{self, BinaryOp, Binding, Expr, Ident, List, Param, UnaryOp};
 use crate::lexer::{Token, TokenIter, TokenKind};
 use logos::Span;
 
-#[derive(thiserror::Error, Debug, PartialEq)]
-pub enum Error {
-    #[error("unexpected token (expected {expected:?}, found {found:?})")]
-    UnexpectedToken {
-        expected: TokenKind,
-        found: Option<TokenKind>,
-        span: Option<Span>,
-    },
-    #[error("expected number, found {found:?}")]
-    ExpectedNumber {
-        found: Option<TokenKind>,
-        span: Option<Span>,
-    },
-    #[error("expected string, found {found:?}")]
-    ExpectedString {
-        found: Option<TokenKind>,
-        span: Option<Span>,
-    },
-    #[error("expected identifier, found {found:?}")]
-    ExpectedIdentifier {
-        found: Option<TokenKind>,
-        span: Option<Span>,
-    },
+pub use _hide_warnings::*;
 
-    #[error("invalid number")]
-    InvalidNumber { span: Span },
+// weird warning bug with the miette+thiserror macros
+mod _hide_warnings {
+    #![allow(unused_assignments)]
 
-    #[error("expected EOF, found {found:?})")]
-    ExpectedEof { found: TokenKind, span: Span },
+    use crate::lexer::TokenKind;
+    use miette::{Diagnostic, SourceSpan};
+
+    #[derive(thiserror::Error, Diagnostic, Debug)]
+    #[error("error parsing")]
+    #[diagnostic(code(kisu::parser))]
+    pub enum Error {
+        #[error("unexpected token (expected {expected:?}, found {found:?}")]
+        UnexpectedToken {
+            expected: TokenKind,
+            found: TokenKind,
+            #[label("unexpected token")]
+            span: SourceSpan,
+        },
+        #[error("expected number, found {found:?}")]
+        #[diagnostic()]
+        ExpectedNumber {
+            found: TokenKind,
+            #[label("expected a number")]
+            span: SourceSpan,
+        },
+        #[error("expected string, found {found:?}")]
+        #[diagnostic()]
+        ExpectedString {
+            found: TokenKind,
+            #[label("expected a string")]
+            span: SourceSpan,
+        },
+        #[error("expected identifier, found {found:?}")]
+        #[diagnostic()]
+        ExpectedIdentifier {
+            found: TokenKind,
+            #[label("expected an identifier")]
+            span: SourceSpan,
+        },
+
+        #[error("invalid number")]
+        #[diagnostic()]
+        InvalidNumber {
+            #[label("invalid number")]
+            span: SourceSpan,
+        },
+
+        #[error("expected EOF, found {found:?}")]
+        #[diagnostic()]
+        ExpectedEof {
+            found: TokenKind,
+            #[label("expected end of file")]
+            span: SourceSpan,
+        },
+
+        #[error("expected expression, found {found:?}")]
+        #[diagnostic()]
+        ExpectedExpr {
+            found: TokenKind,
+            #[label("expected expression")]
+            span: SourceSpan,
+        },
+
+        #[error("missing operand for operator {op:?}")]
+        #[diagnostic()]
+        MissingOperand {
+            op: TokenKind,
+            #[label("missing operand")]
+            span: SourceSpan,
+        },
+    }
 }
 
 #[derive(Clone)]
 pub struct Parser<'a> {
     source: &'a str,
     tokens: TokenIter<'a>,
-    current_token: Option<Token>,
-    next_token: Option<Token>,
+    current_token: Token,
+    next_token: Token,
 }
 
 impl<'a> Parser<'a> {
@@ -46,10 +90,9 @@ impl<'a> Parser<'a> {
         let mut parser = Self {
             source,
             tokens: lexer,
-            current_token: None,
-            next_token: None,
+            current_token: Token::NONE,
+            next_token: Token::NONE,
         };
-
         parser.advance();
         parser.advance();
 
@@ -58,86 +101,83 @@ impl<'a> Parser<'a> {
 
     #[inline]
     fn advance(&mut self) {
-        self.current_token = self.next_token.take();
-        self.next_token = self.tokens.next();
+        std::mem::swap(&mut self.next_token, &mut self.current_token);
+        self.next_token = self.tokens.next().unwrap_or(Token::EOF);
     }
 
     #[inline]
-    pub fn current(&self) -> Option<&Token> {
-        self.current_token.as_ref()
+    pub fn current(&self) -> &Token {
+        &self.current_token
     }
 
     #[inline]
-    pub fn next(&self) -> Option<&Token> {
-        self.next_token.as_ref()
+    pub fn next(&self) -> &Token {
+        &self.next_token
     }
 
     #[inline]
     pub fn check(&self, kind: &crate::lexer::TokenKind) -> bool {
-        self.current_token
-            .as_ref()
-            .is_some_and(|token| &token.kind == kind)
+        &self.current_token.kind == kind
     }
 
     #[inline]
     pub fn check_next(&self, kind: &crate::lexer::TokenKind) -> bool {
-        self.next_token
-            .as_ref()
-            .is_some_and(|token| &token.kind == kind)
+        &self.next_token.kind == kind
     }
 
     pub fn check_consume(&mut self, kind: &crate::lexer::TokenKind) -> Option<Token> {
         if self.check(kind) {
-            let token = self.current_token.take();
-            self.advance();
-            token
+            let token = self.consume();
+            Some(token)
         } else {
             None
         }
     }
 
-    pub fn consume(&mut self) -> Option<Token> {
-        let token = self.current_token.take();
-        self.advance();
+    pub fn consume(&mut self) -> Token {
+        let mut token = Token::NONE;
+        std::mem::swap(&mut token, &mut self.current_token);
+        std::mem::swap(&mut self.next_token, &mut self.current_token);
+        self.next_token = self.tokens.next().unwrap_or(Token::EOF);
         token
     }
 
     #[inline]
     pub fn is_eof(&self) -> bool {
-        self.current_token.is_none() && self.next_token.is_none()
+        self.current_token.kind == TokenKind::Eof && self.next_token.kind == TokenKind::Eof
     }
 
     #[inline]
-    fn token_kind(&self) -> Option<&TokenKind> {
-        self.current_token.as_ref().map(|t| &t.kind)
+    fn token_kind(&self) -> &TokenKind {
+        &self.current_token.kind
     }
 
     #[inline]
-    fn token_span(&self) -> Option<Span> {
-        self.current_token.as_ref().map(|t| t.span.clone())
+    fn token_span(&self) -> &Span {
+        &self.current_token.span
     }
 
     fn binary_op(&self) -> Option<BinaryOp> {
         match self.token_kind() {
-            Some(TokenKind::Add) => Some(BinaryOp::Add),
-            Some(TokenKind::Sub) => Some(BinaryOp::Sub),
-            Some(TokenKind::Mul) => Some(BinaryOp::Mul),
-            Some(TokenKind::Div) => Some(BinaryOp::Div),
-            Some(TokenKind::Eq) => Some(BinaryOp::Eq),
-            Some(TokenKind::NotEq) => Some(BinaryOp::NotEq),
-            Some(TokenKind::Lt) => Some(BinaryOp::Lt),
-            Some(TokenKind::Gt) => Some(BinaryOp::Gt),
-            Some(TokenKind::LtEq) => Some(BinaryOp::LtEq),
-            Some(TokenKind::GtEq) => Some(BinaryOp::GtEq),
-            Some(TokenKind::Dot) => Some(BinaryOp::Dot),
+            TokenKind::Add => Some(BinaryOp::Add),
+            TokenKind::Sub => Some(BinaryOp::Sub),
+            TokenKind::Mul => Some(BinaryOp::Mul),
+            TokenKind::Div => Some(BinaryOp::Div),
+            TokenKind::Eq => Some(BinaryOp::Eq),
+            TokenKind::NotEq => Some(BinaryOp::NotEq),
+            TokenKind::Lt => Some(BinaryOp::Lt),
+            TokenKind::Gt => Some(BinaryOp::Gt),
+            TokenKind::LtEq => Some(BinaryOp::LtEq),
+            TokenKind::GtEq => Some(BinaryOp::GtEq),
+            TokenKind::Dot => Some(BinaryOp::Dot),
             _ => None,
         }
     }
 
     fn unary_op(&self) -> Option<UnaryOp> {
         match self.token_kind() {
-            Some(TokenKind::Sub) => Some(UnaryOp::Neg),
-            Some(TokenKind::Not) => Some(UnaryOp::Not),
+            TokenKind::Sub => Some(UnaryOp::Neg),
+            TokenKind::Not => Some(UnaryOp::Not),
             _ => None,
         }
     }
@@ -147,8 +187,8 @@ impl<'a> Parser<'a> {
             Some(token) => Ok(token),
             None => Err(Error::UnexpectedToken {
                 expected: kind,
-                found: self.token_kind().cloned(),
-                span: self.token_span(),
+                found: self.token_kind().clone(),
+                span: self.token_span().clone().into(),
             }),
         }
     }
@@ -157,14 +197,14 @@ impl<'a> Parser<'a> {
         if let Some(token) = self.check_consume(&TokenKind::Number) {
             let span = token.span;
             let lexeme = &self.source[span.start..span.end];
-            let value = lexeme
-                .parse::<f64>()
-                .map_err(|_| Error::InvalidNumber { span: span.clone() })?;
+            let value = lexeme.parse::<f64>().map_err(|_| Error::InvalidNumber {
+                span: span.clone().into(),
+            })?;
             Ok(Expr::Number(value.into()))
         } else {
             Err(Error::ExpectedNumber {
-                found: self.token_kind().cloned(),
-                span: self.token_span(),
+                found: self.token_kind().clone(),
+                span: self.token_span().clone().into(),
             })
         }
     }
@@ -179,8 +219,8 @@ impl<'a> Parser<'a> {
             Ok(Expr::String(content.into()))
         } else {
             Err(Error::ExpectedString {
-                found: self.token_kind().cloned(),
-                span: self.token_span(),
+                found: self.token_kind().clone(),
+                span: self.token_span().clone().into(),
             })
         }
     }
@@ -195,20 +235,20 @@ impl<'a> Parser<'a> {
             }))
         } else {
             Err(Error::ExpectedIdentifier {
-                found: self.token_kind().cloned(),
-                span: self.token_span(),
+                found: self.token_kind().clone(),
+                span: self.token_span().clone().into(),
             })
         }
     }
 
     fn expect_eof(&mut self) -> Result<(), Error> {
-        if self.is_eof() {
+        if self.current().kind == TokenKind::Eof {
             Ok(())
         } else {
-            let token = self.current_token.as_ref().unwrap();
+            let token = &self.current_token;
             Err(Error::ExpectedEof {
                 found: token.kind.clone(),
-                span: token.span.clone(),
+                span: token.span.clone().into(),
             })
         }
     }
@@ -224,8 +264,8 @@ impl<'a> Parser<'a> {
             Ok(Ident { name: str.0 })
         } else {
             Err(Error::ExpectedIdentifier {
-                found: self.token_kind().cloned(),
-                span: self.token_span(),
+                found: self.token_kind().clone(),
+                span: self.token_span().clone().into(),
             })
         }
     }
@@ -272,7 +312,7 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::BraceL)?;
 
         let mut fields = Vec::new();
-        let mut trailing_semicolon = true;
+        let mut trailing_token = None;
 
         while self.check_key() {
             let key = self.key()?;
@@ -284,17 +324,17 @@ impl<'a> Parser<'a> {
 
             fields.push(Param { ident: key, expr });
 
-            if self.check_consume(&TokenKind::Semicolon).is_some() {
-                trailing_semicolon = true;
+            if self.check(&TokenKind::Semicolon) {
+                self.advance();
             } else {
-                trailing_semicolon = false;
-                if self.check(&TokenKind::BraceR) || self.check(&TokenKind::Colon) {
+                trailing_token = Some(self.current_token.clone());
+                if self.check(&TokenKind::BraceR) {
                     break;
                 } else {
                     return Err(Error::UnexpectedToken {
                         expected: TokenKind::Semicolon,
-                        found: self.token_kind().cloned(),
-                        span: self.token_span(),
+                        found: self.token_kind().clone(),
+                        span: self.token_span().clone().into(),
                     });
                 }
             }
@@ -308,11 +348,13 @@ impl<'a> Parser<'a> {
                 body: Box::new(body),
             })
         } else {
-            if !fields.is_empty() && !trailing_semicolon {
+            if let Some(trailing_token) = trailing_token
+                && !fields.is_empty()
+            {
                 return Err(Error::UnexpectedToken {
                     expected: TokenKind::Semicolon,
-                    found: self.token_kind().cloned(),
-                    span: self.token_span(),
+                    found: trailing_token.kind,
+                    span: trailing_token.span.into(),
                 });
             }
             Ok(Expr::Map {
@@ -347,21 +389,27 @@ impl<'a> Parser<'a> {
 
     fn atom(&mut self) -> Result<Expr, Error> {
         match self.token_kind() {
-            Some(TokenKind::Number) => self.number(),
-            Some(TokenKind::String) => self.string(),
-            Some(TokenKind::Ident) => self.ident(),
-            Some(TokenKind::BracketL) => self.list(),
-            Some(TokenKind::ParenL) => self.block(false),
-            Some(TokenKind::BraceL) => self.map_and_lambda(),
+            TokenKind::Number => self.number(),
+            TokenKind::String => self.string(),
+            TokenKind::Ident => self.ident(),
+            TokenKind::BracketL => self.list(),
+            TokenKind::ParenL => self.block(false),
+            TokenKind::BraceL => self.map_and_lambda(),
             _ => Err(Error::UnexpectedToken {
-                expected: self.token_kind().unwrap_or(&TokenKind::None).clone(),
-                found: self.token_kind().cloned(),
-                span: self.token_span(),
+                expected: self.token_kind().clone(),
+                found: self.token_kind().clone(),
+                span: self.token_span().clone().into(),
             }),
         }
     }
 
     pub fn expr(&mut self) -> Result<Expr, Error> {
+        if self.is_eof() {
+            return Err(Error::ExpectedExpr {
+                found: self.current().kind.clone(),
+                span: self.token_span().clone().into(),
+            });
+        }
         self.binary_expr(0)
     }
 
@@ -375,7 +423,14 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            self.consume();
+            let op_token = self.consume();
+
+            if self.current().kind == TokenKind::Eof {
+                return Err(Error::MissingOperand {
+                    op: op_token.kind,
+                    span: op_token.span.into(),
+                });
+            }
 
             if op == BinaryOp::Dot {
                 let key = self.key()?;
@@ -398,8 +453,8 @@ impl<'a> Parser<'a> {
     }
 
     fn app(&mut self, mut func: Expr) -> Result<Expr, Error> {
-        while let Some(token_kind) = self.token_kind() {
-            match token_kind {
+        loop {
+            match self.token_kind() {
                 TokenKind::BraceL | TokenKind::String | TokenKind::Number => {
                     let arg = self.atom()?;
                     func = Expr::App {
