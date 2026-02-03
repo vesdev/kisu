@@ -230,8 +230,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn block(&mut self) -> Result<Expr, Error> {
-        self.expect(TokenKind::ParenL)?;
+    fn block(&mut self, top_level: bool) -> Result<Expr, Error> {
+        if !top_level {
+            self.expect(TokenKind::ParenL)?;
+        }
 
         let mut bindings = Vec::new();
 
@@ -256,7 +258,9 @@ impl<'a> Parser<'a> {
         }
 
         let expr = self.expr()?;
-        self.expect(TokenKind::ParenR)?;
+        if !top_level {
+            self.expect(TokenKind::ParenR)?;
+        }
 
         Ok(Expr::Block {
             bindings,
@@ -347,7 +351,7 @@ impl<'a> Parser<'a> {
             Some(TokenKind::String) => self.string(),
             Some(TokenKind::Ident) => self.ident(),
             Some(TokenKind::BracketL) => self.list(),
-            Some(TokenKind::ParenL) => self.block(),
+            Some(TokenKind::ParenL) => self.block(false),
             Some(TokenKind::BraceL) => self.map_and_lambda(),
             _ => Err(Error::UnexpectedToken {
                 expected: self.token_kind().unwrap_or(&TokenKind::None).clone(),
@@ -437,7 +441,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) -> Result<Expr, Error> {
-        let expr = self.expr()?;
+        let expr = self.block(true)?;
         self.expect_eof()?;
         Ok(expr)
     }

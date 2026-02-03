@@ -70,6 +70,17 @@ fn block_with_binding() {
 }
 
 #[test]
+fn block_top_level() {
+    assert_eval!(
+        "
+            a = 5;
+            a * 2
+        ",
+        Value::Number(10.0.into())
+    );
+}
+
+#[test]
 fn map() {
     use std::collections::HashMap;
     let mut expected = HashMap::new();
