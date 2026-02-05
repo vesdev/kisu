@@ -1,38 +1,43 @@
-```js
+```haskell
 ident = r/[a-zA-Z_][a-zA-Z0-9_]*/ ;
 number = r/[0-9]+(\.[0-9]+)?/ ;
 string = r/"([^"\\]|\\.)*"/ ;
-
 literal = number | string ;
+key = ident | string;
 
+program = type_def* block ;
 
-program = expr ;
+type_ident = r/^[A-Z][a-zA-Z0-9_]*$/ ;
+type_def = "struct" type_ident "=" type_expr ;
+list_type = "[" type_expr "]" ;
+lambda_type = "{" (key ":" type_expr ",")* "}" "->" type_expr ;
+
+constraint = ":" ( type_ident
+                 | list_type
+                 | lambda_type );
 
 expr = ident
      | literal
      | lambda
-     | lambda
      | block
      | map
-     | "[" list "]"
+     | list
      | unary
      | binary
      | app ;
 
-binary = expr ("+" | "-" | "*" | "/" | "==" | "!=" | "<" | ">" | "<=" | ">=" | ".") expr ;
-unary = ("-" | "!" ) expr ;
+lambda_param = key constraint? ("=" expr)? ;
+lambda = "{" (lambda_param ("," lambda_param)*)? "}" ":" expr ;
+
+assign = key constraint? "=" expr ";"
+       | key constraint? ";" ; // inherit
+
+block = "(" assign* expr ")" ;
+map = "{" assign* "}" ;
+
+list = "[" expr ("," expr)* "]" ;
 
 app = expr expr ;
-key = ident | string ;
-
-bind_item = key "=" expr
-     | key ;
-bind = bind_item ";" ;
-
-lambda = "{" bind* bind_item? "}" ":" expr ;
-
-block = "(" bind* expr ")" ;
-map = "{" bind* "}" ;
-list = expr | expr ";" list ;
-
+binary = expr ("+" | "-" | "*" | "/" | "==" | "!=" | "<" | ">" | "<=" | ">=" | ".") expr ;
+unary = ("-" | "!" ) expr ;
 ```
