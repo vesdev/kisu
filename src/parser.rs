@@ -56,12 +56,6 @@ mod _hide_warnings {
             #[label("expected expression")]
             span: SourceSpan,
         },
-        #[error("invalid operand for operator {op:?}")]
-        InvalidOperand {
-            op: TokenKind,
-            #[label("invalid operand")]
-            span: SourceSpan,
-        },
     }
 }
 
@@ -251,6 +245,21 @@ impl<'a> Parser<'a> {
         self.check(&TokenKind::Ident) || self.check(&TokenKind::String)
     }
 
+    fn if_expr(&mut self) -> Result<Expr, Error> {
+        self.expect(TokenKind::If)?;
+        let cond = Box::new(self.expr()?);
+        self.expect(TokenKind::Then)?;
+        let then_expr = Box::new(self.expr()?);
+        self.expect(TokenKind::Else)?;
+        let else_expr = Box::new(self.expr()?);
+
+        Ok(Expr::IfExpr {
+            cond,
+            then_expr,
+            else_expr,
+        })
+    }
+
     fn key(&mut self) -> Result<Ident, Error> {
         if let Ok(Expr::Ident(ident)) = self.ident() {
             Ok(ident)
@@ -305,89 +314,38 @@ impl<'a> Parser<'a> {
     fn map(&mut self) -> Result<Expr, Error> {
         self.expect(TokenKind::BraceL)?;
 
-        let mut fields = Vec::new();
-        let mut delimeters: Vec<Token> = Vec::new();
-        let mut delimeter: Option<Token> = None;
+        let mut bindings = Vec::new();
 
-        while self.check_key() {
+        if self.check(&TokenKind::BraceR) {
+            self.consume();
+            return Ok(Expr::Map { bindings });
+        }
+
+        loop {
             let key = self.key()?;
             let expr = if self.check_consume(&TokenKind::Assign).is_some() {
-                Some(Box::new(self.expr()?))
+                self.expr()?
             } else {
-                None
+                Expr::Ident(key.clone())
             };
 
-            fields.push(Param { ident: key, expr });
+            bindings.push(Binding {
+                ident: key,
+                expr: Box::new(expr),
+            });
 
-            if self.check(&TokenKind::Semicolon) | self.check(&TokenKind::Comma) {
-                delimeter = Some(self.consume());
-                delimeters.push(delimeter.clone().unwrap());
-            } else if self.check(&TokenKind::BraceR) {
-                delimeter = Some(self.current_token.clone());
-                break;
+            if self.check_consume(&TokenKind::Semicolon).is_some() {
+                if self.check(&TokenKind::BraceR) {
+                    break;
+                }
             } else {
-                return Err(Error::UnexpectedToken {
-                    expected: TokenKind::Semicolon,
-                    found: self.token_kind().clone(),
-                    span: self.token_span().clone().into(),
-                });
+                break;
             }
         }
 
         self.expect(TokenKind::BraceR)?;
 
-        if self.check_consume(&TokenKind::Colon).is_some() {
-            for sep_token in &delimeters {
-                if sep_token.kind != TokenKind::Comma {
-                    return Err(Error::UnexpectedToken {
-                        expected: TokenKind::Comma,
-                        found: sep_token.kind.clone(),
-                        span: sep_token.span.clone().into(),
-                    });
-                }
-            }
-            let body = self.expr()?;
-            Ok(Expr::Lambda {
-                params: fields,
-                body: Box::new(body),
-            })
-        } else {
-            if !fields.is_empty() && delimeters.len() < fields.len() {
-                let found_kind = delimeter
-                    .as_ref()
-                    .map(|t| t.kind.clone())
-                    .unwrap_or(TokenKind::Eof);
-                let found_span = delimeter
-                    .as_ref()
-                    .map(|t| t.span.clone())
-                    .unwrap_or(self.token_span().clone());
-
-                return Err(Error::UnexpectedToken {
-                    expected: TokenKind::Semicolon,
-                    found: found_kind,
-                    span: found_span.into(),
-                });
-            }
-
-            for sep_token in &delimeters {
-                if sep_token.kind != TokenKind::Semicolon {
-                    return Err(Error::UnexpectedToken {
-                        expected: TokenKind::Semicolon,
-                        found: sep_token.kind.clone(),
-                        span: sep_token.span.clone().into(),
-                    });
-                }
-            }
-            Ok(Expr::Map {
-                bindings: fields
-                    .into_iter()
-                    .map(|f| Binding {
-                        ident: f.ident.clone(),
-                        expr: f.expr.unwrap_or_else(|| Box::new(Expr::Ident(f.ident))),
-                    })
-                    .collect(),
-            })
-        }
+        Ok(Expr::Map { bindings })
     }
 
     fn lambda(&mut self) -> Result<Expr, Error> {
@@ -453,6 +411,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn check_atom(&self) -> bool {
+        matches!(
+            self.token_kind(),
+            TokenKind::Number
+                | TokenKind::String
+                | TokenKind::Ident
+                | TokenKind::BracketL
+                | TokenKind::ParenL
+                | TokenKind::BraceL
+                | TokenKind::Pipe
+        )
+    }
+
     pub fn expr(&mut self) -> Result<Expr, Error> {
         if self.is_eof() {
             return Err(Error::ExpectedExpr {
@@ -466,80 +437,62 @@ impl<'a> Parser<'a> {
     fn binary_expr(&mut self, min_precedence: u8) -> Result<Expr, Error> {
         let mut lhs = self.unary_expr()?;
 
-        while let Some(op) = self.binary_op() {
-            let precedence = op.precedence();
+        loop {
+            let op_precedence = if let Some(op) = self.binary_op() {
+                op.precedence()
+            } else if self.check_atom() {
+                1
+            } else {
+                break;
+            };
 
-            if precedence < min_precedence {
+            if op_precedence < min_precedence {
                 break;
             }
 
-            let op_token = self.consume();
+            if let Some(op) = self.binary_op() {
+                self.consume();
+                if op == BinaryOp::Dot {
+                    let key = self.key()?;
+                    lhs = Expr::MapAccess {
+                        expr: Box::new(lhs),
+                        ident: key,
+                    };
+                    continue;
+                }
 
-            if op == BinaryOp::Dot {
-                let key = self.key()?;
-
-                lhs = Expr::MapAccess {
-                    expr: Box::new(lhs),
-                    ident: key,
-                };
-            } else if let Ok(rhs) = self.binary_expr(precedence + 1) {
+                let rhs = self.binary_expr(op_precedence + 1)?;
                 lhs = Expr::Binary {
                     op,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                 };
-            } else {
-                return Err(Error::InvalidOperand {
-                    op: op_token.kind,
-                    span: op_token.span.into(),
-                });
+                continue;
             }
+
+            let rhs = self.binary_expr(op_precedence + 1)?;
+            lhs = Expr::App {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
 
         Ok(lhs)
     }
 
-    fn app(&mut self, mut func: Expr) -> Result<Expr, Error> {
-        loop {
-            match self.token_kind() {
-                TokenKind::BraceL | TokenKind::String | TokenKind::Number => {
-                    let arg = self.atom()?;
-                    func = Expr::App {
-                        lhs: Box::new(func),
-                        rhs: Box::new(arg),
-                    };
-                }
-                TokenKind::Ident => {
-                    // make sure its not a lambda
-                    if !self.check_next(&TokenKind::Colon) {
-                        let arg = self.atom()?;
-                        func = Expr::App {
-                            lhs: Box::new(func),
-                            rhs: Box::new(arg),
-                        };
-                    }
-                }
-                _ => break,
-            }
-        }
-        Ok(func)
-    }
-
     fn unary_expr(&mut self) -> Result<Expr, Error> {
+        if self.check(&TokenKind::If) {
+            return self.if_expr();
+        }
         if let Some(op) = self.unary_op() {
             self.consume();
-
             let expr = self.unary_expr()?;
-
-            let func = Expr::Unary {
+            return Ok(Expr::Unary {
                 op,
                 expr: Box::new(expr),
-            };
-            return self.app(func);
+            });
         }
-
-        let atom_expr = self.atom()?;
-        self.app(atom_expr)
+        self.atom()
     }
 
     pub fn parse(&mut self) -> Result<Expr, Error> {

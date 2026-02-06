@@ -1,9 +1,40 @@
-use miette::Diagnostic;
-
-use crate::ast::{self, BinaryOp, Binding, Expr, Num, Param, Str, UnaryOp};
+use crate::ast::{self, BinaryOp, Binding, Expr, Num, Param, Str, UnaryOp, Visitor};
+use std::cell::OnceCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
+pub struct Thunk {
+    expr: Box<Expr>,
+    closure: Closure,
+    value: OnceCell<Result<Value, Error>>,
+}
+
+impl Thunk {
+    pub fn new(expr: Box<Expr>, closure: Closure) -> Self {
+        Self {
+            expr,
+            closure,
+            value: OnceCell::new(),
+        }
+    }
+
+    pub fn force(self: &Rc<Self>, walker: &mut TreeWalker) -> Result<Value, Error> {
+        self.value
+            .get_or_init(|| {
+                let call_stack =
+                    std::mem::replace(&mut walker.call_stack, vec![self.closure.clone()]);
+                let result = walker
+                    .visit_expr(&self.expr)
+                    .and_then(|_| walker.stack_pop());
+                walker.call_stack = call_stack;
+                result
+            })
+            .clone()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Number(Num),
     String(Str),
@@ -14,10 +45,37 @@ pub enum Value {
         body: Box<Expr>,
         closure: Closure,
     },
+    Thunk(Rc<Thunk>),
     Unit,
 }
 
-#[derive(thiserror::Error, Diagnostic, Debug, PartialEq)]
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Number(l), Value::Number(r)) => l == r,
+            (Value::String(l), Value::String(r)) => l == r,
+            (Value::Map(l), Value::Map(r)) => l == r,
+            (Value::List(l), Value::List(r)) => l == r,
+            (
+                Value::Lambda {
+                    params: p1,
+                    body: b1,
+                    closure: c1,
+                },
+                Value::Lambda {
+                    params: p2,
+                    body: b2,
+                    closure: c2,
+                },
+            ) => p1 == p2 && b1 == b2 && c1 == c2,
+            (Value::Unit, Value::Unit) => true,
+            (Value::Thunk(l), Value::Thunk(r)) => Rc::ptr_eq(l, r),
+            _ => false,
+        }
+    }
+}
+
+#[derive(thiserror::Error, miette::Diagnostic, Debug, PartialEq, Clone)]
 pub enum Error {
     #[error("feature not implemented")]
     NotImplemented(String),
@@ -92,7 +150,38 @@ impl Default for TreeWalker {
 
 impl TreeWalker {
     pub fn consume(mut self) -> Result<Value, Error> {
-        self.stack_pop()
+        let value = self.stack_pop()?;
+        self.force_consume(value)
+    }
+
+    fn force_consume(&mut self, value: Value) -> Result<Value, Error> {
+        let value = self.force(value)?;
+
+        match value {
+            Value::List(values) => {
+                let mut list = Vec::with_capacity(values.len());
+                for val in values {
+                    list.push(self.force_consume(val)?);
+                }
+                Ok(Value::List(list))
+            }
+            Value::Map(value) => {
+                let mut map = HashMap::with_capacity(value.len());
+                for (key, val) in value {
+                    map.insert(key, self.force_consume(val)?);
+                }
+                Ok(Value::Map(map))
+            }
+            _ => Ok(value),
+        }
+    }
+
+    #[inline]
+    fn force(&mut self, value: Value) -> Result<Value, Error> {
+        match value {
+            Value::Thunk(thunk) => thunk.force(self),
+            _ => Ok(value),
+        }
     }
 
     #[inline]
@@ -130,16 +219,17 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
     type Err = Error;
 
     fn visit_ident(&mut self, ident: &'ast ast::Ident) -> Result<(), Self::Err> {
-        let value = self.closure_mut()?.scope_get(&ident.name)?.clone();
-        self.stack_push(value);
+        let val = self.closure_mut()?.scope_get(&ident.name)?.clone();
+        let forced_val = self.force(val)?;
+        self.stack_push(forced_val);
         Ok(())
     }
 
     fn visit_bind(&mut self, bind: &'ast Binding) -> Result<(), Self::Err> {
-        self.visit_expr(&bind.expr)?;
-        let value = self.stack_pop()?;
+        let closure = self.closure()?.clone();
+        let thunk = Rc::new(Thunk::new(bind.expr.clone(), closure));
         self.closure_mut()?
-            .scope_insert(bind.ident.name.clone(), value.clone())?;
+            .scope_insert(bind.ident.name.clone(), Value::Thunk(thunk))?;
         Ok(())
     }
 
@@ -156,8 +246,9 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
     fn visit_unary_op(&mut self, op: &'ast UnaryOp, expr: &'ast Expr) -> Result<(), Self::Err> {
         self.visit_expr(expr)?;
         let val = self.stack_pop()?;
+        let forced_val = self.force(val)?;
 
-        let result = match (op, val) {
+        let result = match (op, forced_val) {
             (UnaryOp::Neg, Value::Number(n)) => Ok(Value::Number((-n.0).into())),
             (UnaryOp::Not, Value::Number(n)) => {
                 Ok(Value::Number(if n.0 == 0.0 { 1.0 } else { 0.0 }.into()))
@@ -181,9 +272,11 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         self.visit_expr(lhs)?;
         self.visit_expr(rhs)?;
         let right_val = self.stack_pop()?;
+        let right_forced_val = self.force(right_val)?;
         let left_val = self.stack_pop()?;
+        let left_forced_val = self.force(left_val)?;
 
-        let result = match (op, left_val, right_val) {
+        let result = match (op, left_forced_val, right_forced_val) {
             (BinaryOp::Add, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
             (BinaryOp::Sub, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l - r)),
             (BinaryOp::Mul, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l * r)),
@@ -224,8 +317,9 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
         for binding in bindings {
             self.visit_bind(binding)?;
-            let value = self.closure()?.scope_get(&binding.ident.name)?;
-            map.insert(binding.ident.name.clone(), value.clone());
+            let value = self.closure()?.scope_get(&binding.ident.name)?.clone();
+            let forced_value = self.force(value)?;
+            map.insert(binding.ident.name.clone(), forced_value);
         }
         self.closure_mut()?.scope_pop()?;
         self.stack_push(Value::Map(map));
@@ -234,11 +328,13 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
     fn visit_app(&mut self, lhs: &'ast Expr, rhs: &'ast Expr) -> Result<(), Self::Err> {
         self.visit_expr(lhs)?;
-        self.visit_expr(rhs)?;
-        let arg_val = self.stack_pop()?;
-        let func_val = self.stack_pop()?;
+        let val = self.stack_pop()?;
+        let forced_val = self.force(val)?;
+        let closure = self.closure()?.clone();
+        let arg_thunk = Rc::new(Thunk::new(Box::new(rhs.clone()), closure));
+        let arg_val = Value::Thunk(arg_thunk);
 
-        let result_val = match func_val {
+        let result_val = match forced_val {
             Value::Lambda {
                 mut params,
                 body,
@@ -276,7 +372,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
             _ => {
                 return Err(Error::NotImplemented(format!(
                     "Cannot call value of type {:?}",
-                    func_val
+                    forced_val
                 )));
             }
         };
@@ -331,9 +427,10 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
     fn visit_list(&mut self, list: &'ast ast::List) -> Result<(), Self::Err> {
         let mut result = vec![];
+        let closure = self.closure()?.clone();
         for expr in &list.exprs {
-            self.visit_expr(expr)?;
-            result.push(self.stack_pop()?);
+            let thunk = Rc::new(Thunk::new(Box::new(expr.clone()), closure.clone()));
+            result.push(Value::Thunk(thunk));
         }
         self.stack_push(Value::List(result));
         Ok(())
@@ -345,12 +442,42 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         ident: &'ast ast::Ident,
     ) -> Result<(), Self::Err> {
         self.visit_expr(expr)?;
-        let result = match self.stack_pop()? {
+        let val = self.stack_pop()?;
+        let forced_val = self.force(val)?;
+        let result = match forced_val {
             Value::Map(map) => map.get(&ident.name).cloned().ok_or(Error::InvalidMapAccess),
             _ => Err(Error::InvalidMapAccess),
         }?;
 
         self.stack_push(result);
+        Ok(())
+    }
+
+    fn visit_if_expr(
+        &mut self,
+        cond: &'ast Expr,
+        then_expr: &'ast Expr,
+        else_expr: &'ast Expr,
+    ) -> Result<(), Self::Err> {
+        self.visit_expr(cond)?;
+        let cond_val = self.stack_pop()?;
+        let forced_cond = self.force(cond_val)?;
+
+        let is_truthy = match forced_cond {
+            Value::Number(n) => n.0 != 0.0,
+            _ => {
+                return Err(Error::NotImplemented(
+                    "Condition in if/else must be a number".to_string(),
+                ));
+            }
+        };
+
+        if is_truthy {
+            self.visit_expr(then_expr)?;
+        } else {
+            self.visit_expr(else_expr)?;
+        }
+
         Ok(())
     }
 }

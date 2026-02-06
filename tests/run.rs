@@ -221,3 +221,16 @@ fn list() {
 fn list_empty() {
     assert_eval!(r#"[]"#, Value::List(vec![]));
 }
+
+#[test]
+fn if_expr() {
+    assert_eval!("if 1 then 1 else 0", Value::Number(1.0.into()));
+}
+
+#[test]
+fn if_else_nested() {
+    assert_eval!(
+        "if 1 then if 0 then 10 else 2 else 3",
+        Value::Number(2.0.into())
+    );
+}

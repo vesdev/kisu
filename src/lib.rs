@@ -1,5 +1,4 @@
 use logos::Lexer;
-use miette::Diagnostic;
 
 use crate::{ast::Visitor, eval::Value, lexer::TokenIter, parser::Parser};
 
@@ -27,7 +26,7 @@ pub fn eval(source: &str) -> Result<Value, Error> {
     Ok(walker.consume()?)
 }
 
-#[derive(thiserror::Error, Diagnostic, Debug)]
+#[derive(thiserror::Error, miette::Diagnostic, Debug)]
 pub enum Error {
     #[error(transparent)]
     #[diagnostic(transparent)]

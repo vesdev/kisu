@@ -52,6 +52,12 @@ pub enum TokenKind {
     GtEq,
     #[token("!")]
     Not,
+    #[token("if")]
+    If,
+    #[token("else")]
+    Else,
+    #[token("then")]
+    Then,
 
     #[regex(r#""([^"\\]|\\.)*""#)]
     String,

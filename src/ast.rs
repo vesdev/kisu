@@ -128,6 +128,11 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    IfExpr {
+        cond: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -199,6 +204,11 @@ pub trait Visitor<'ast>: Sized {
             Expr::Ident(ident) => self.visit_ident(ident),
             Expr::List(list) => self.visit_list(list),
             Expr::MapAccess { expr, ident } => self.visit_map_access(expr, ident),
+            Expr::IfExpr {
+                cond,
+                then_expr,
+                else_expr,
+            } => self.visit_if_expr(cond, then_expr, else_expr),
         }
     }
 
@@ -223,4 +233,10 @@ pub trait Visitor<'ast>: Sized {
     fn visit_lambda(&mut self, params: &'ast [Param], body: &'ast Expr) -> Result<(), Self::Err>;
     fn visit_list(&mut self, list: &'ast List) -> Result<(), Self::Err>;
     fn visit_map_access(&mut self, expr: &'ast Expr, ident: &'ast Ident) -> Result<(), Self::Err>;
+    fn visit_if_expr(
+        &mut self,
+        cond: &'ast Expr,
+        then_expr: &'ast Expr,
+        else_expr: &'ast Expr,
+    ) -> Result<(), Self::Err>;
 }
