@@ -302,10 +302,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    // TODO: move away from nix style lambdas
-    // greedily parsing it is ugly as you can see
-    // and disambiguating with the colon requires cloning the token iter
-    fn braced_expr(&mut self) -> Result<Expr, Error> {
+    fn map(&mut self) -> Result<Expr, Error> {
         self.expect(TokenKind::BraceL)?;
 
         let mut fields = Vec::new();
@@ -393,6 +390,34 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn lambda(&mut self) -> Result<Expr, Error> {
+        self.expect(TokenKind::Pipe)?;
+
+        let mut params = Vec::new();
+        if !self.check(&TokenKind::Pipe) {
+            loop {
+                let key = self.key()?;
+                params.push(Param {
+                    ident: key,
+                    expr: None,
+                });
+
+                if self.check_consume(&TokenKind::Comma).is_none() {
+                    break;
+                }
+            }
+        }
+
+        self.expect(TokenKind::Pipe)?;
+        self.expect(TokenKind::Colon)?;
+        let body = self.expr()?;
+
+        Ok(Expr::Lambda {
+            params,
+            body: Box::new(body),
+        })
+    }
+
     fn list(&mut self) -> Result<Expr, Error> {
         self.expect(TokenKind::BracketL)?;
         let mut exprs = Vec::new();
@@ -418,7 +443,8 @@ impl<'a> Parser<'a> {
             TokenKind::Ident => self.ident(),
             TokenKind::BracketL => self.list(),
             TokenKind::ParenL => self.block(false),
-            TokenKind::BraceL => self.braced_expr(),
+            TokenKind::BraceL => self.map(),
+            TokenKind::Pipe => self.lambda(),
             _ => Err(Error::UnexpectedToken {
                 expected: self.token_kind().clone(),
                 found: self.token_kind().clone(),

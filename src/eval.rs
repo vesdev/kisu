@@ -14,7 +14,7 @@ pub enum Value {
         body: Box<Expr>,
         closure: Closure,
     },
-    Void,
+    Unit,
 }
 
 #[derive(thiserror::Error, Diagnostic, Debug, PartialEq)]
@@ -238,52 +238,50 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         let arg_val = self.stack_pop()?;
         let func_val = self.stack_pop()?;
 
-        let result = match func_val {
+        let result_val = match func_val {
             Value::Lambda {
-                params,
+                mut params,
                 body,
                 closure,
             } => {
-                self.closure_push(closure);
-
-                self.closure_mut()?.scope_push();
-
-                if params.len() == 1 {
-                    self.closure_mut()?
-                        .scope_insert(params[0].clone(), arg_val)?;
-                } else if params.is_empty() {
-                } else if let Value::Map(arg_map) = arg_val {
-                    for p in params {
-                        if let Some(val) = arg_map.get(&p) {
-                            self.closure_mut()?.scope_insert(p.clone(), val.clone())?;
-                        } else {
-                            return Err(Error::NotImplemented(format!(
-                                "Missing argument '{}' for lambda",
-                                p
-                            )));
-                        }
-                    }
-                } else {
+                if params.is_empty() {
                     return Err(Error::NotImplemented(
-                        "Multi-parameter lambda expects a map as argument".to_string(),
+                        "Too many arguments for lambda".to_string(),
                     ));
                 }
 
-                //TODO: detect recursion
-                self.visit_expr(&body)?;
+                let param_name = params.remove(0);
 
-                self.closure_pop()?;
+                self.closure_push(closure.clone());
+                self.closure_mut()?.scope_push();
 
-                // returned value on top of stack
-                self.stack_pop()
+                self.closure_mut()?.scope_insert(param_name, arg_val)?;
+
+                if !params.is_empty() {
+                    let new_lambda_closure = self.closure_mut()?.clone();
+                    let new_lambda = Value::Lambda {
+                        params,
+                        body,
+                        closure: new_lambda_closure,
+                    };
+                    self.closure_pop()?;
+                    new_lambda
+                } else {
+                    self.visit_expr(&body)?;
+                    let final_result = self.stack_pop()?;
+                    self.closure_pop()?;
+                    final_result
+                }
             }
-            _ => Err(Error::NotImplemented(format!(
-                "Cannot call value of type {:?}",
-                func_val
-            ))),
+            _ => {
+                return Err(Error::NotImplemented(format!(
+                    "Cannot call value of type {:?}",
+                    func_val
+                )));
+            }
         };
 
-        self.stack_push(result?);
+        self.stack_push(result_val);
         Ok(())
     }
 
@@ -310,8 +308,6 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
     }
 
     fn visit_lambda(&mut self, params: &'ast [Param], body: &'ast Expr) -> Result<(), Self::Err> {
-        // TODO: only clone used values from parent scope
-        // this is fairly expensive
         let mut closure = self.closure()?.clone();
         let mut names = vec![];
 

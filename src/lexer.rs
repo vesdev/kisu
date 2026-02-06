@@ -26,6 +26,8 @@ pub enum TokenKind {
     BraceL,
     #[token("}")]
     BraceR,
+    #[token("|")]
+    Pipe,
 
     #[token(":")]
     Colon,

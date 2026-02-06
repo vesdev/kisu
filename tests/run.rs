@@ -169,8 +169,8 @@ fn lambda() {
     assert_eval!(
         "
         (
-            add = {l,r}: l + r;
-            add {l = 2; r = 3;}
+            add = |l,r|: l + r;
+            add 2 3
         )",
         Value::Number(5.0.into())
     );
@@ -181,7 +181,7 @@ fn lambda_currying() {
     assert_eval!(
         "
         (
-            add = {l}: {r}: l + r;
+            add = |l|: |r|: l + r;
             add 2 3
         )",
         Value::Number(5.0.into())
@@ -193,7 +193,7 @@ fn lambda_string_param() {
     assert_eval!(
         r#"
         (
-            add = {"l"}: {"r"}: l + r;
+            add = |"l","r"|: l + r;
             add 5 6
         )"#,
         Value::Number(11.0.into())

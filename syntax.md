@@ -10,7 +10,7 @@ program = type_def* block ;
 type_ident = r/^[A-Z][a-zA-Z0-9_]*$/ ;
 type_def = "struct" type_ident "=" type_expr ;
 list_type = "[" type_expr "]" ;
-lambda_type = "{" (key ":" type_expr ",")* "}" "->" type_expr ;
+lambda_type = "fn" "(" (key ":" type_expr ",")* ")" "->" type_expr ;
 
 constraint = ":" ( type_ident
                  | list_type
@@ -27,7 +27,7 @@ expr = ident
      | app ;
 
 lambda_param = key constraint? ("=" expr)? ;
-lambda = "{" (lambda_param ("," lambda_param)*)? "}" ":" expr ;
+lambda = "|" (lambda_param ("," lambda_param)*)? "|" ":" expr ;
 
 assign = key constraint? "=" expr ";"
        | key constraint? ";" ; // inherit

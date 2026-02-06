@@ -68,7 +68,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
                 let seq_deserializer = SeqDeserializer::new(l);
                 visitor.visit_seq(seq_deserializer)
             }
-            Value::Void => visitor.visit_unit(),
+            Value::Unit => visitor.visit_unit(),
             _ => Err(de::Error::custom(format!(
                 "unsupported Value type for deserialization: {:?}",
                 self.value
@@ -232,7 +232,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Void => visitor.visit_none(),
+            Value::Unit => visitor.visit_none(),
             _ => visitor.visit_some(self),
         }
     }
@@ -242,7 +242,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Void => visitor.visit_unit(),
+            Value::Unit => visitor.visit_unit(),
             _ => Err(de::Error::custom("expected unit")),
         }
     }
@@ -256,7 +256,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         match self.value {
-            Value::Void => visitor.visit_unit(),
+            Value::Unit => visitor.visit_unit(),
             _ => Err(de::Error::custom("expected unit struct")),
         }
     }
