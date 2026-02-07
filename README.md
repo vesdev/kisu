@@ -16,7 +16,7 @@ Current implementation is dynamically typed and turing complete.
 The plan is to add opt-in turing completeness by feature-gating general recursion through a typesystem.
 This will give termination safety for configuration usage while still allowing general purpose programming.
 
-Current syntax example:
+Current syntax examples:
 ```haskell
 fib = |fib, n|:
     if n == 0 then 0
@@ -24,5 +24,25 @@ fib = |fib, n|:
     else (fib fib n - 1) + (fib fib n - 2);
     
 fib fib 5
+```
+
+```haskell
+mk_dep = |name, version|: {
+  name;
+  version;
+};
+
+{
+  package = {
+    name = "kisu";
+    edition = "2024";
+  };
+
+  dependencies = [
+    mk_dep "logos" "*",
+    mk_dep "serde" "*",
+    mk_dep "miette" "*",
+  ];
+}
 ```
 
