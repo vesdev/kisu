@@ -253,3 +253,14 @@ fn type_constraint_lambda() {
         Value::Number(4.0)
     );
 }
+
+#[test]
+fn type_constraint_paren() {
+    assert_eval!(
+        "
+            f: fn Number -> (fn Number -> Number) = |x, y|: x + y + 1;
+            f 1 2
+        ",
+        Value::Number(4.0)
+    );
+}

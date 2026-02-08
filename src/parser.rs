@@ -263,6 +263,12 @@ impl<'a> Parser<'a> {
 
     fn type_expr(&mut self) -> Result<Type, Error> {
         match self.token_kind() {
+            TokenKind::ParenL => {
+                self.advance();
+                let ty = self.type_expr()?;
+                self.expect(TokenKind::ParenR)?;
+                Ok(ty)
+            }
             TokenKind::TypeIdent => self.type_ident(),
             TokenKind::BracketL => self.list_type(),
             TokenKind::Fn => self.lambda_type(),

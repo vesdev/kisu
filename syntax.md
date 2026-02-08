@@ -15,7 +15,8 @@ lambda_type = "fn" type_expr* "->" type_expr ;
 
 constraint = ":" type_expr ;
 
-type_expr = type_ident
+type_expr = "(" type_expr ")"
+          | type_ident
           | list_type
           | lambda_type ;
 

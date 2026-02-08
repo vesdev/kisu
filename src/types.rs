@@ -18,7 +18,7 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Type::Var(n) => write!(f, "t{}", n),
-            Type::Lambda(arg, ret) => write!(f, "({} -> {})", arg, ret),
+            Type::Lambda(arg, ret) => write!(f, "(fn {} -> {})", arg, ret),
             Type::List(t) => write!(f, "[{}]", t),
             Type::Map(fields) => {
                 let mut s = String::new();
