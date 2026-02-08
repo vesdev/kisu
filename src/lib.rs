@@ -1,12 +1,19 @@
 use logos::Lexer;
 
-use crate::{ast::Visitor, eval::Value, lexer::TokenIter, parser::Parser};
+use crate::{
+    ast::Visitor,
+    eval::{TreeWalker, Value},
+    lexer::TokenIter,
+    parser::Parser,
+    types::TypeChecker,
+};
 
 pub mod ast;
 pub mod deserialize;
 pub mod eval;
 pub mod lexer;
 pub mod parser;
+pub mod types;
 
 pub use deserialize::from_str;
 
@@ -21,7 +28,9 @@ pub fn eval(source: &str) -> Result<Value, Error> {
     let lexer = Lexer::new(source);
     let mut parser = Parser::new(TokenIter::from(lexer), source);
     let expr = parser.parse()?;
-    let mut walker = eval::TreeWalker::default();
+    let mut checker = TypeChecker::default();
+    checker.check(&expr)?;
+    let mut walker = TreeWalker::default();
     walker.visit_expr(&expr)?;
     Ok(walker.consume()?)
 }
@@ -37,4 +46,7 @@ pub enum Error {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Deserialize(#[from] deserialize::Error),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Type(#[from] types::Error),
 }

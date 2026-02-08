@@ -14,47 +14,47 @@ macro_rules! assert_eval {
 
 #[test]
 fn add() {
-    assert_eval!("1 + 2", Value::Number(3.0.into()));
+    assert_eval!("1 + 2", Value::Number(3.0));
 }
 
 #[test]
 fn sub() {
-    assert_eval!("5 - 2", Value::Number(3.0.into()));
+    assert_eval!("5 - 2", Value::Number(3.0));
 }
 
 #[test]
 fn mul() {
-    assert_eval!("3 * 4", Value::Number(12.0.into()));
+    assert_eval!("3 * 4", Value::Number(12.0));
 }
 
 #[test]
 fn div() {
-    assert_eval!("10 / 2", Value::Number(5.0.into()));
+    assert_eval!("10 / 2", Value::Number(5.0));
 }
 
 #[test]
 fn precedence() {
-    assert_eval!("1 + 2 * 3", Value::Number(7.0.into()));
+    assert_eval!("1 + 2 * 3", Value::Number(7.0));
 }
 
 #[test]
 fn unary() {
-    assert_eval!("-10", Value::Number((-10.0).into()));
+    assert_eval!("-10", Value::Number(-10.0));
 }
 
 #[test]
 fn complex() {
-    assert_eval!("-1 + 2 * 3", Value::Number(5.0.into()));
+    assert_eval!("-1 + 2 * 3", Value::Number(5.0));
 }
 
 #[test]
 fn block() {
-    assert_eval!("(1 + 2) * 3", Value::Number(9.0.into()));
+    assert_eval!("(1 + 2) * 3", Value::Number(9.0));
 }
 
 #[test]
 fn string() {
-    assert_eval!(r#""hello""#, Value::String("hello".into()));
+    assert_eval!(r#""hello""#, Value::String("hello".to_string()));
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn block_with_binding() {
             a = 10;
             a * 2
         )",
-        Value::Number(20.0.into())
+        Value::Number(20.0)
     );
 }
 
@@ -76,7 +76,7 @@ fn block_top_level() {
             a = 5;
             a * 2
         ",
-        Value::Number(10.0.into())
+        Value::Number(10.0)
     );
 }
 
@@ -84,8 +84,8 @@ fn block_top_level() {
 fn map() {
     use std::collections::HashMap;
     let mut expected = HashMap::new();
-    expected.insert("a".to_string(), Value::Number(10.0.into()));
-    expected.insert("b".to_string(), Value::Number(20.0.into()));
+    expected.insert("a".to_string(), Value::Number(10.0));
+    expected.insert("b".to_string(), Value::Number(20.0));
 
     assert_eval!(
         "
@@ -105,7 +105,7 @@ fn map_access() {
             map = { a = 5; };
             map.a
         )",
-        Value::Number(5.0.into())
+        Value::Number(5.0)
     );
 }
 
@@ -113,8 +113,8 @@ fn map_access() {
 fn map_string_key() {
     use std::collections::HashMap;
     let mut expected = HashMap::new();
-    expected.insert("a".to_string(), Value::Number(10.0.into()));
-    expected.insert("b".to_string(), Value::Number(20.0.into()));
+    expected.insert("a".to_string(), Value::Number(10.0));
+    expected.insert("b".to_string(), Value::Number(20.0));
 
     assert_eval!(
         r#"
@@ -130,14 +130,15 @@ fn map_string_key() {
 fn inherit() {
     use std::collections::HashMap;
     let mut map = HashMap::new();
-    map.insert("x".to_string(), Value::String("hello".into()));
-    map.insert("y".to_string(), Value::Number(10.0.into())); // Corrected this line
+    map.insert("x".to_string(), Value::String("hello".to_string()));
+    map.insert("y".to_string(), Value::Number(10.0));
 
     assert_eval!(
         r#"
+        y = 10;
         {
             x = "hello";
-            y = 10;
+            y;
         }"#,
         Value::Map(map)
     );
@@ -147,9 +148,9 @@ fn inherit() {
 fn inherit_string_key() {
     use std::collections::HashMap;
     let mut map = HashMap::new();
-    map.insert("a b".to_string(), Value::String("hello".into()));
+    map.insert("a b".to_string(), Value::String("hello".to_string()));
     let mut map2 = HashMap::new();
-    map2.insert("a b".to_string(), Value::String("hello".into()));
+    map2.insert("a b".to_string(), Value::String("hello".to_string()));
     map.insert("c".to_string(), Value::Map(map2));
 
     assert_eval!(
@@ -172,7 +173,7 @@ fn lambda() {
             add = |l,r|: l + r;
             add 2 3
         )",
-        Value::Number(5.0.into())
+        Value::Number(5.0)
     );
 }
 
@@ -184,7 +185,7 @@ fn lambda_currying() {
             add = |l|: |r|: l + r;
             add 2 3
         )",
-        Value::Number(5.0.into())
+        Value::Number(5.0)
     );
 }
 
@@ -196,7 +197,7 @@ fn lambda_string_param() {
             add = |"l","r"|: l + r;
             add 5 6
         )"#,
-        Value::Number(11.0.into())
+        Value::Number(11.0)
     );
 }
 
@@ -204,18 +205,14 @@ fn lambda_string_param() {
 fn string_concat() {
     assert_eval!(
         r#""Hello" + " world!""#,
-        Value::String("Hello world!".into())
+        Value::String("Hello world!".to_string())
     );
 }
 
 #[test]
 fn list() {
-    let expected = vec![
-        Value::Number(1.0.into()),
-        Value::String("forsen".into()),
-        Value::Number(3.0.into()),
-    ];
-    assert_eval!(r#"[1, "forsen", 3]"#, Value::List(expected));
+    let expected = vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)];
+    assert_eval!(r#"[1, 2, 3]"#, Value::List(expected));
 }
 #[test]
 fn list_empty() {
@@ -224,13 +221,24 @@ fn list_empty() {
 
 #[test]
 fn if_expr() {
-    assert_eval!("if 1 then 1 else 0", Value::Number(1.0.into()));
+    assert_eval!("if true then 1 else 0", Value::Number(1.0));
 }
 
 #[test]
-fn if_else_nested() {
+fn if_expr_nested() {
     assert_eval!(
-        "if 1 then if 0 then 10 else 2 else 3",
-        Value::Number(2.0.into())
+        "if true then if false then 10 else 2 else 3",
+        Value::Number(2.0)
+    );
+}
+
+#[test]
+fn type_constraint() {
+    assert_eval!(
+        "
+            x: Number = 10.0;
+            x
+        ",
+        Value::Number(10.0)
     );
 }

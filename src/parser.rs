@@ -1,4 +1,4 @@
-use crate::ast::{self, BinaryOp, Binding, Expr, Ident, List, Param, UnaryOp};
+use crate::ast::{self, BinaryOp, Binding, Expr, Ident, List, Num, Param, Str, TypeIdent, UnaryOp};
 use crate::lexer::{Token, TokenIter, TokenKind};
 use logos::Span;
 
@@ -18,42 +18,42 @@ mod _hide_warnings {
         UnexpectedToken {
             expected: TokenKind,
             found: TokenKind,
-            #[label("unexpected token")]
+            #[label]
             span: SourceSpan,
         },
         #[error("expected number, found {found:?}")]
         ExpectedNumber {
             found: TokenKind,
-            #[label("expected a number")]
+            #[label]
             span: SourceSpan,
         },
         #[error("expected string, found {found:?}")]
         ExpectedString {
             found: TokenKind,
-            #[label("expected a string")]
+            #[label]
             span: SourceSpan,
         },
         #[error("expected identifier, found {found:?}")]
         ExpectedIdentifier {
             found: TokenKind,
-            #[label("expected an identifier")]
+            #[label]
             span: SourceSpan,
         },
         #[error("invalid number")]
         InvalidNumber {
-            #[label("invalid number")]
+            #[label]
             span: SourceSpan,
         },
         #[error("expected EOF, found {found:?}")]
         ExpectedEof {
             found: TokenKind,
-            #[label("expected end of file")]
+            #[label]
             span: SourceSpan,
         },
         #[error("expected expression, found {found:?}")]
         ExpectedExpr {
             found: TokenKind,
-            #[label("expected expression")]
+            #[label]
             span: SourceSpan,
         },
     }
@@ -182,50 +182,66 @@ impl<'a> Parser<'a> {
     }
 
     fn number(&mut self) -> Result<Expr, Error> {
-        if let Some(token) = self.check_consume(&TokenKind::Number) {
-            let span = token.span;
-            let lexeme = &self.source[span.start..span.end];
-            let value = lexeme.parse::<f64>().map_err(|_| Error::InvalidNumber {
-                span: span.clone().into(),
-            })?;
-            Ok(Expr::Number(value.into()))
-        } else {
-            Err(Error::ExpectedNumber {
-                found: self.token_kind().clone(),
-                span: self.token_span().clone().into(),
-            })
-        }
+        let token = self.expect(TokenKind::Number)?;
+        let span = token.span.clone();
+        let lexeme = &self.source[span.start..span.end];
+        let value = lexeme.parse::<f64>().map_err(|_| Error::InvalidNumber {
+            span: span.clone().into(),
+        })?;
+        Ok(Expr::Number(Num(value, span)))
     }
 
     fn string(&mut self) -> Result<Expr, Error> {
-        if let Some(token) = self.check_consume(&TokenKind::String) {
-            let span = token.span;
-            let lexeme = &self.source[span.start..span.end];
+        let token = self.expect(TokenKind::String)?;
+        let span = token.span.clone();
+        let lexeme = &self.source[span.start..span.end];
 
-            // remove quotes
-            let content = &lexeme[1..lexeme.len() - 1];
-            Ok(Expr::String(content.into()))
-        } else {
-            Err(Error::ExpectedString {
-                found: self.token_kind().clone(),
-                span: self.token_span().clone().into(),
-            })
-        }
+        // remove quotes
+        let content = &lexeme[1..lexeme.len() - 1];
+        Ok(Expr::String(Str(content.into(), span)))
     }
 
     fn ident(&mut self) -> Result<Expr, Error> {
-        if let Some(token) = self.check_consume(&TokenKind::Ident) {
-            let span = token.span;
-            let name = &self.source[span.start..span.end];
+        let token = self.expect(TokenKind::Ident)?;
+        let span = token.span.clone();
+        let name = &self.source[span.start..span.end];
 
-            Ok(Expr::Ident(ast::Ident {
-                name: name.to_string(),
-            }))
-        } else {
-            Err(Error::ExpectedIdentifier {
+        Ok(Expr::Ident(ast::Ident {
+            name: name.to_string(),
+            span,
+        }))
+    }
+
+    fn type_ident(&mut self) -> Result<TypeIdent, Error> {
+        let token = self.expect(TokenKind::Type)?;
+        let span = token.span.clone();
+        let name = &self.source[span.start..span.end];
+
+        Ok(TypeIdent {
+            name: name.to_string(),
+            span,
+        })
+    }
+
+    fn list_type(&mut self) -> Result<TypeIdent, Error> {
+        let start = self.expect(TokenKind::BracketL)?.span.start;
+        let ty = self.type_ident()?;
+        let end = self.expect(TokenKind::BracketR)?.span.end;
+        Ok(TypeIdent {
+            name: ty.name,
+            span: start..end,
+        })
+    }
+
+    fn type_expr(&mut self) -> Result<TypeIdent, Error> {
+        match self.token_kind() {
+            TokenKind::Type => self.type_ident(),
+            TokenKind::BracketL => self.list_type(),
+            _ => Err(Error::UnexpectedToken {
+                expected: TokenKind::Type,
                 found: self.token_kind().clone(),
                 span: self.token_span().clone().into(),
-            })
+            }),
         }
     }
 
@@ -246,17 +262,18 @@ impl<'a> Parser<'a> {
     }
 
     fn if_expr(&mut self) -> Result<Expr, Error> {
-        self.expect(TokenKind::If)?;
+        let if_token = self.expect(TokenKind::If)?;
         let cond = Box::new(self.expr()?);
         self.expect(TokenKind::Then)?;
         let then_expr = Box::new(self.expr()?);
-        self.expect(TokenKind::Else)?;
+        let else_token = self.expect(TokenKind::Else)?;
         let else_expr = Box::new(self.expr()?);
 
         Ok(Expr::IfExpr {
             cond,
             then_expr,
             else_expr,
+            span: if_token.span.start..else_token.span.end,
         })
     }
 
@@ -264,7 +281,10 @@ impl<'a> Parser<'a> {
         if let Ok(Expr::Ident(ident)) = self.ident() {
             Ok(ident)
         } else if let Ok(Expr::String(str)) = self.string() {
-            Ok(Ident { name: str.0 })
+            Ok(Ident {
+                name: str.0,
+                span: str.1,
+            })
         } else {
             Err(Error::ExpectedIdentifier {
                 found: self.token_kind().clone(),
@@ -273,56 +293,77 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn constraint(&mut self) -> Result<Option<TypeIdent>, Error> {
+        if self.expect(TokenKind::Colon).is_err() {
+            return Ok(None);
+        };
+
+        Ok(Some(self.type_expr()?))
+    }
+
     fn block(&mut self, top_level: bool) -> Result<Expr, Error> {
+        let mut start = self.current().span.start;
+
         if !top_level {
-            self.expect(TokenKind::ParenL)?;
+            start = self.expect(TokenKind::ParenL)?.span.end;
         }
 
         let mut bindings = Vec::new();
 
         while self.check_key()
-            && (self.check_next(&TokenKind::Assign) || self.check_next(&TokenKind::Semicolon))
+            && (self.check_next(&TokenKind::Assign)
+                || self.check_next(&TokenKind::Colon)
+                || self.check_next(&TokenKind::Semicolon))
         {
             let key = self.key()?;
+            let constraint = self.constraint()?;
 
-            // desugar inherit syntax
             let expr = if self.check_consume(&TokenKind::Assign).is_some() {
                 self.expr()?
             } else {
                 Expr::Ident(key.clone())
             };
 
-            self.expect(TokenKind::Semicolon)?;
+            let span = key.span.start..(self.expect(TokenKind::Semicolon)?.span.end);
 
             bindings.push(Binding {
                 ident: key,
+                constraint,
                 expr: Box::new(expr),
+                span,
             });
         }
 
-        let expr = self.expr()?;
+        let expr_result = self.expr()?;
+        let mut end = expr_result.span().end;
+
         if !top_level {
-            self.expect(TokenKind::ParenR)?;
+            end = self.expect(TokenKind::ParenR)?.span.end;
         }
 
         Ok(Expr::Block {
             bindings,
-            expr: Box::new(expr),
+            expr: Box::new(expr_result),
+            span: start..end,
         })
     }
 
     fn map(&mut self) -> Result<Expr, Error> {
-        self.expect(TokenKind::BraceL)?;
+        let start = self.expect(TokenKind::BraceL)?.span.end;
 
         let mut bindings = Vec::new();
 
         if self.check(&TokenKind::BraceR) {
-            self.consume();
-            return Ok(Expr::Map { bindings });
+            return Ok(Expr::Map {
+                bindings,
+                span: start..self.consume().span.end,
+            });
         }
 
         loop {
             let key = self.key()?;
+            let constraint = self.constraint()?;
+
             let expr = if self.check_consume(&TokenKind::Assign).is_some() {
                 self.expr()?
             } else {
@@ -330,6 +371,8 @@ impl<'a> Parser<'a> {
             };
 
             bindings.push(Binding {
+                span: key.span.start..expr.span().end,
+                constraint,
                 ident: key,
                 expr: Box::new(expr),
             });
@@ -343,19 +386,23 @@ impl<'a> Parser<'a> {
             }
         }
 
-        self.expect(TokenKind::BraceR)?;
+        let span = start..self.expect(TokenKind::BraceR)?.span.end;
 
-        Ok(Expr::Map { bindings })
+        Ok(Expr::Map { bindings, span })
     }
 
     fn lambda(&mut self) -> Result<Expr, Error> {
-        self.expect(TokenKind::Pipe)?;
+        let start = self.expect(TokenKind::Pipe)?.span.start;
 
         let mut params = Vec::new();
         if !self.check(&TokenKind::Pipe) {
             loop {
                 let key = self.key()?;
+                let constraint = self.constraint()?;
+
                 params.push(Param {
+                    span: key.span.clone(),
+                    constraint,
                     ident: key,
                     expr: None,
                 });
@@ -368,36 +415,48 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::Pipe)?;
         self.expect(TokenKind::Colon)?;
-        let body = self.expr()?;
+        let body = Box::new(self.expr()?);
 
-        Ok(Expr::Lambda {
-            params,
-            body: Box::new(body),
-        })
+        let span = start..body.span().end;
+
+        Ok(Expr::Lambda { params, body, span })
     }
 
     fn list(&mut self) -> Result<Expr, Error> {
-        self.expect(TokenKind::BracketL)?;
+        let start = self.expect(TokenKind::BracketL)?.span.start;
+
         let mut exprs = Vec::new();
 
         while !self.check(&TokenKind::BracketR) {
             let expr = self.expr()?;
             exprs.push(expr);
-            if self.check_consume(&TokenKind::Comma).is_none()
-                && self.check_next(&TokenKind::BracketR)
+            if self.check_consume(&TokenKind::Comma).is_none() && !self.check(&TokenKind::BracketR)
             {
-                break;
-            };
+                return Err(Error::UnexpectedToken {
+                    expected: TokenKind::Comma,
+                    found: self.token_kind().clone(),
+                    span: self.token_span().clone().into(),
+                });
+            }
         }
 
-        self.expect(TokenKind::BracketR)?;
-        Ok(Expr::List(List { exprs }))
+        let span = start..self.expect(TokenKind::BracketR)?.span.end;
+
+        Ok(Expr::List(List { exprs, span }))
     }
 
     fn atom(&mut self) -> Result<Expr, Error> {
-        match self.token_kind() {
+        let expr_result = match self.token_kind() {
             TokenKind::Number => self.number(),
             TokenKind::String => self.string(),
+            TokenKind::True => {
+                self.consume();
+                Ok(Expr::Bool(true))
+            }
+            TokenKind::False => {
+                self.consume();
+                Ok(Expr::Bool(false))
+            }
             TokenKind::Ident => self.ident(),
             TokenKind::BracketL => self.list(),
             TokenKind::ParenL => self.block(false),
@@ -408,7 +467,9 @@ impl<'a> Parser<'a> {
                 found: self.token_kind().clone(),
                 span: self.token_span().clone().into(),
             }),
-        }
+        }?;
+
+        Ok(expr_result)
     }
 
     fn check_atom(&self) -> bool {
@@ -417,6 +478,8 @@ impl<'a> Parser<'a> {
             TokenKind::Number
                 | TokenKind::String
                 | TokenKind::Ident
+                | TokenKind::True
+                | TokenKind::False
                 | TokenKind::BracketL
                 | TokenKind::ParenL
                 | TokenKind::BraceL
@@ -455,6 +518,7 @@ impl<'a> Parser<'a> {
                 if op == BinaryOp::Dot {
                     let key = self.key()?;
                     lhs = Expr::MapAccess {
+                        span: lhs.span().start..key.span.end,
                         expr: Box::new(lhs),
                         ident: key,
                     };
@@ -464,6 +528,7 @@ impl<'a> Parser<'a> {
                 let rhs = self.binary_expr(op_precedence + 1)?;
                 lhs = Expr::Binary {
                     op,
+                    span: rhs.span().start..rhs.span().end,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                 };
@@ -472,6 +537,7 @@ impl<'a> Parser<'a> {
 
             let rhs = self.binary_expr(op_precedence + 1)?;
             lhs = Expr::App {
+                span: rhs.span().start..rhs.span().end,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             };
@@ -485,11 +551,13 @@ impl<'a> Parser<'a> {
             return self.if_expr();
         }
         if let Some(op) = self.unary_op() {
-            self.consume();
+            let op_token = self.consume();
             let expr = self.unary_expr()?;
+            let span = op_token.span.start..expr.span().end;
             return Ok(Expr::Unary {
                 op,
                 expr: Box::new(expr),
+                span,
             });
         }
         self.atom()

@@ -1,4 +1,5 @@
 use crate::ast::{self, BinaryOp, Binding, Expr, Num, Param, Str, UnaryOp, Visitor};
+use miette::SourceSpan;
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -36,8 +37,9 @@ impl Thunk {
 
 #[derive(Debug, Clone)]
 pub enum Value {
-    Number(Num),
-    String(Str),
+    Number(f64),
+    String(String),
+    Bool(bool),
     Map(HashMap<String, Value>),
     List(Vec<Value>),
     Lambda {
@@ -77,14 +79,14 @@ impl PartialEq for Value {
 
 #[derive(thiserror::Error, miette::Diagnostic, Debug, PartialEq, Clone)]
 pub enum Error {
-    #[error("feature not implemented")]
-    NotImplemented(String),
+    #[error("feature not implemented: {0}")]
+    NotImplemented(String, #[label] SourceSpan),
     #[error("identifier '{0}' not found")]
-    IdentifierNotFound(String),
+    IdentifierNotFound(String, #[label] SourceSpan),
     #[error("stack underflow")]
     StackUnderflow,
     #[error("tried accessing a map with invalid parameters")]
-    InvalidMapAccess,
+    InvalidMapAccess(#[label] SourceSpan),
 }
 
 #[derive(Debug, PartialEq, Default, Clone)]
@@ -112,7 +114,10 @@ impl Closure {
             .iter()
             .rev()
             .find_map(|scope| scope.vars.get(name))
-            .ok_or(Error::IdentifierNotFound(name.to_owned()))
+            .ok_or(Error::IdentifierNotFound(
+                name.to_owned(),
+                SourceSpan::new(0.into(), 0),
+            ))
     }
 
     #[inline]
@@ -234,12 +239,17 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
     }
 
     fn visit_num(&mut self, num: &'ast Num) -> Result<(), Self::Err> {
-        self.stack_push(Value::Number(*num));
+        self.stack_push(Value::Number(num.0));
         Ok(())
     }
 
     fn visit_str(&mut self, str: &'ast Str) -> Result<(), Self::Err> {
-        self.stack_push(Value::String(str.clone()));
+        self.stack_push(Value::String(str.0.clone()));
+        Ok(())
+    }
+
+    fn visit_bool(&mut self, b: bool) -> Result<(), Self::Err> {
+        self.stack_push(Value::Bool(b));
         Ok(())
     }
 
@@ -248,15 +258,22 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         let val = self.stack_pop()?;
         let forced_val = self.force(val)?;
 
-        let result = match (op, forced_val) {
-            (UnaryOp::Neg, Value::Number(n)) => Ok(Value::Number((-n.0).into())),
-            (UnaryOp::Not, Value::Number(n)) => {
-                Ok(Value::Number(if n.0 == 0.0 { 1.0 } else { 0.0 }.into()))
-            }
-            _ => Err(Error::NotImplemented(format!(
-                "Unary op {:?} for value {:?}",
-                op, expr
-            ))),
+        let result = match op {
+            UnaryOp::Neg => match forced_val {
+                Value::Number(n) => Ok(Value::Number(-n)),
+                _ => Err(Error::NotImplemented(
+                    format!("Unary op {:?} for value {:?}", op, forced_val),
+                    expr.span().into(),
+                )),
+            },
+            UnaryOp::Not => match forced_val {
+                Value::Number(n) => Ok(Value::Bool(n == 0.0)),
+                Value::Bool(b) => Ok(Value::Bool(!b)),
+                _ => Err(Error::NotImplemented(
+                    format!("Unary op {:?} for value {:?}", op, forced_val),
+                    expr.span().into(),
+                )),
+            },
         };
 
         self.stack_push(result?);
@@ -271,40 +288,74 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
     ) -> Result<(), Self::Err> {
         self.visit_expr(lhs)?;
         self.visit_expr(rhs)?;
-        let right_val = self.stack_pop()?;
-        let right_forced_val = self.force(right_val)?;
-        let left_val = self.stack_pop()?;
-        let left_forced_val = self.force(left_val)?;
+        let rhs_val = self.stack_pop()?;
+        let rhs_forced = self.force(rhs_val)?;
+        let lhs_val = self.stack_pop()?;
+        let lhs_forced = self.force(lhs_val)?;
 
-        let result = match (op, left_forced_val, right_forced_val) {
-            (BinaryOp::Add, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
-            (BinaryOp::Sub, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l - r)),
-            (BinaryOp::Mul, Value::Number(l), Value::Number(r)) => Ok(Value::Number(l * r)),
-            (BinaryOp::Div, Value::Number(l), Value::Number(r)) => {
-                if r.0 == 0.0 {
-                    return Err(Error::NotImplemented("Division by zero".to_string()));
-                }
-                Ok(Value::Number(l / r))
+        let result = match op {
+            BinaryOp::Add => match (lhs_forced, rhs_forced) {
+                (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
+                (Value::String(l), Value::String(r)) => Ok(Value::String(l + &r)),
+                (l, r) => Err(Error::NotImplemented(
+                    format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
+                    (lhs.span().start..rhs.span().end).into(),
+                )),
+            },
+            BinaryOp::Sub => match (lhs_forced, rhs_forced) {
+                (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l - r)),
+                (l, r) => Err(Error::NotImplemented(
+                    format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
+                    (lhs.span().start..rhs.span().end).into(),
+                )),
+            },
+            BinaryOp::Mul => match (lhs_forced, rhs_forced) {
+                (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l * r)),
+                (l, r) => Err(Error::NotImplemented(
+                    format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
+                    (lhs.span().start..rhs.span().end).into(),
+                )),
+            },
+            BinaryOp::Div => match (lhs_forced, rhs_forced) {
+                (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l / r)),
+                (l, r) => Err(Error::NotImplemented(
+                    format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
+                    (lhs.span().start..rhs.span().end).into(),
+                )),
+            },
+            BinaryOp::Eq => Ok(Value::Bool(lhs_forced == rhs_forced)),
+            BinaryOp::NotEq => Ok(Value::Bool(lhs_forced != rhs_forced)),
+            BinaryOp::Lt => match (lhs_forced, rhs_forced) {
+                (Value::Number(l), Value::Number(r)) => Ok(Value::Bool(l < r)),
+                (l, r) => Err(Error::NotImplemented(
+                    format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
+                    (lhs.span().start..rhs.span().end).into(),
+                )),
+            },
+            BinaryOp::Gt => match (lhs_forced, rhs_forced) {
+                (Value::Number(l), Value::Number(r)) => Ok(Value::Bool(l > r)),
+                (l, r) => Err(Error::NotImplemented(
+                    format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
+                    (lhs.span().start..rhs.span().end).into(),
+                )),
+            },
+            BinaryOp::LtEq => match (lhs_forced, rhs_forced) {
+                (Value::Number(l), Value::Number(r)) => Ok(Value::Bool(l <= r)),
+                (l, r) => Err(Error::NotImplemented(
+                    format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
+                    (lhs.span().start..rhs.span().end).into(),
+                )),
+            },
+            BinaryOp::GtEq => match (lhs_forced, rhs_forced) {
+                (Value::Number(l), Value::Number(r)) => Ok(Value::Bool(l >= r)),
+                (l, r) => Err(Error::NotImplemented(
+                    format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
+                    (lhs.span().start..rhs.span().end).into(),
+                )),
+            },
+            BinaryOp::Dot => {
+                unreachable!();
             }
-            (BinaryOp::Eq, l, r) => Ok(Value::Number(if l == r { 1.0 } else { 0.0 }.into())),
-            (BinaryOp::NotEq, l, r) => Ok(Value::Number(if l != r { 1.0 } else { 0.0 }.into())),
-            (BinaryOp::Lt, Value::Number(l), Value::Number(r)) => {
-                Ok(Value::Number(if l < r { 1.0 } else { 0.0 }.into()))
-            }
-            (BinaryOp::Gt, Value::Number(l), Value::Number(r)) => {
-                Ok(Value::Number(if l > r { 1.0 } else { 0.0 }.into()))
-            }
-            (BinaryOp::LtEq, Value::Number(l), Value::Number(r)) => {
-                Ok(Value::Number(if l <= r { 1.0 } else { 0.0 }.into()))
-            }
-            (BinaryOp::GtEq, Value::Number(l), Value::Number(r)) => {
-                Ok(Value::Number(if l >= r { 1.0 } else { 0.0 }.into()))
-            }
-            (BinaryOp::Add, Value::String(l), Value::String(r)) => Ok(Value::String(l + r)),
-            _ => Err(Error::NotImplemented(format!(
-                "Binary op {:?} for values {:?} and {:?}",
-                op, lhs, rhs
-            ))),
         };
 
         self.stack_push(result?);
@@ -343,6 +394,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
                 if params.is_empty() {
                     return Err(Error::NotImplemented(
                         "Too many arguments for lambda".to_string(),
+                        (lhs.span().start..rhs.span().end).into(),
                     ));
                 }
 
@@ -370,10 +422,10 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
                 }
             }
             _ => {
-                return Err(Error::NotImplemented(format!(
-                    "Cannot call value of type {:?}",
-                    forced_val
-                )));
+                return Err(Error::NotImplemented(
+                    format!("Cannot call value of type {:?}", forced_val),
+                    (lhs.span().start..rhs.span().end).into(),
+                ));
             }
         };
 
@@ -445,8 +497,14 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         let val = self.stack_pop()?;
         let forced_val = self.force(val)?;
         let result = match forced_val {
-            Value::Map(map) => map.get(&ident.name).cloned().ok_or(Error::InvalidMapAccess),
-            _ => Err(Error::InvalidMapAccess),
+            Value::Map(map) => map
+                .get(&ident.name)
+                .cloned()
+                .ok_or(Error::IdentifierNotFound(
+                    ident.name.clone(),
+                    ident.span.clone().into(),
+                )),
+            _ => Err(Error::InvalidMapAccess(expr.span().into())),
         }?;
 
         self.stack_push(result);
@@ -464,10 +522,11 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         let forced_cond = self.force(cond_val)?;
 
         let is_truthy = match forced_cond {
-            Value::Number(n) => n.0 != 0.0,
+            Value::Bool(b) => b,
             _ => {
                 return Err(Error::NotImplemented(
-                    "Condition in if/else must be a number".to_string(),
+                    "Condition in if/else must be a bool".to_string(),
+                    cond.span().into(),
                 ));
             }
         };
@@ -478,6 +537,11 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
             self.visit_expr(else_expr)?;
         }
 
+        Ok(())
+    }
+
+    fn visit_type_ident(&mut self, _type_ident: &'ast ast::TypeIdent) -> Result<(), Self::Err> {
+        // no runtime type checking
         Ok(())
     }
 }

@@ -58,16 +58,22 @@ pub enum TokenKind {
     Else,
     #[token("then")]
     Then,
+    #[token("true")]
+    True,
+    #[token("false")]
+    False,
 
     #[regex(r#""([^"\\]|\\.)*""#)]
     String,
-    #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
+    #[regex(r"[A-Z][a-zA-Z0-9_]*")]
+    Type,
+    #[regex(r"[a-z_][a-zA-Z0-9_]*")]
     Ident,
     #[regex(r"[0-9]+(\.[0-9]+)?")]
     Number,
+
     #[allow(dead_code)]
     Eof,
-
     #[allow(dead_code)]
     None,
 }

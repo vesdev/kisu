@@ -1,30 +1,42 @@
 use std::ops::{Add, Div, Mul, Sub};
 
 use crate::lexer::TokenKind;
+use logos::Span;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ident {
     pub name: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeIdent {
+    pub name: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Binding {
     pub ident: Ident,
+    pub constraint: Option<TypeIdent>,
     pub expr: Box<Expr>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub ident: Ident,
+    pub constraint: Option<TypeIdent>,
     pub expr: Option<Box<Expr>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Str(pub String);
+pub struct Str(pub String, pub Span);
 
 impl From<&str> for Str {
     fn from(value: &str) -> Self {
-        Self(value.to_string())
+        Self(value.to_string(), 0..0)
     }
 }
 
@@ -32,22 +44,16 @@ impl Add for Str {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + &rhs.0)
+        Self(self.0 + &rhs.0, self.1.start..rhs.1.end)
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Num(pub f64);
+#[derive(Debug, Clone, PartialEq)]
+pub struct Num(pub f64, pub Span);
 
 impl From<f64> for Num {
     fn from(value: f64) -> Self {
-        Self(value)
-    }
-}
-
-impl PartialEq for Num {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        Self(value, 0..0)
     }
 }
 
@@ -61,7 +67,7 @@ impl Add for Num {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
+        Self(self.0 + rhs.0, self.1.start..rhs.1.end)
     }
 }
 
@@ -69,7 +75,7 @@ impl Sub for Num {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        Self(self.0 - rhs.0)
+        Self(self.0 - rhs.0, self.1.start..rhs.1.end)
     }
 }
 
@@ -77,7 +83,7 @@ impl Mul for Num {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        Self(self.0 * rhs.0)
+        Self(self.0 * rhs.0, self.1.start..rhs.1.end)
     }
 }
 
@@ -85,54 +91,86 @@ impl Div for Num {
     type Output = Self;
 
     fn div(self, rhs: Self) -> Self::Output {
-        Self(self.0 / rhs.0)
+        Self(self.0 / rhs.0, self.1.start..rhs.1.end)
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct List {
     pub exprs: Vec<Expr>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(Num),
     String(Str),
+    Bool(bool),
     List(List),
     Ident(Ident),
+    TypeIdent(TypeIdent),
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
+        span: Span,
     },
     Binary {
         op: BinaryOp,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
+        span: Span,
     },
     MapAccess {
         expr: Box<Expr>,
         ident: Ident,
+        span: Span,
     },
     Lambda {
         params: Vec<Param>,
         body: Box<Expr>,
+        span: Span,
     },
     Block {
         bindings: Vec<Binding>,
         expr: Box<Expr>,
+        span: Span,
     },
     Map {
         bindings: Vec<Binding>,
+        span: Span,
     },
     App {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
+        span: Span,
     },
     IfExpr {
         cond: Box<Expr>,
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
+        span: Span,
     },
+}
+
+impl Expr {
+    pub fn span(&self) -> Span {
+        match self {
+            Expr::Number(n) => n.1.clone(),
+            Expr::String(s) => s.1.clone(),
+            Expr::Bool(_) => 0..0,
+            Expr::List(list) => list.span.clone(),
+            Expr::Ident(ident) => ident.span.clone(),
+            Expr::Unary { span, .. } => span.clone(),
+            Expr::Binary { span, .. } => span.clone(),
+            Expr::MapAccess { span, .. } => span.clone(),
+            Expr::Lambda { span, .. } => span.clone(),
+            Expr::Block { span, .. } => span.clone(),
+            Expr::Map { span, .. } => span.clone(),
+            Expr::App { span, .. } => span.clone(),
+            Expr::IfExpr { span, .. } => span.clone(),
+            Expr::TypeIdent(TypeIdent { span, .. }) => span.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -195,27 +233,48 @@ pub trait Visitor<'ast>: Sized {
         match expr {
             Expr::Number(n) => self.visit_num(n),
             Expr::String(s) => self.visit_str(s),
-            Expr::Unary { op, expr } => self.visit_unary_op(op, expr),
-            Expr::Binary { op, lhs, rhs } => self.visit_binary_op(op, lhs, rhs),
-            Expr::Lambda { params, body } => self.visit_lambda(params, body),
-            Expr::Block { bindings, expr } => self.visit_block_expr(bindings, expr),
-            Expr::Map { bindings } => self.visit_map(bindings),
-            Expr::App { lhs, rhs } => self.visit_app(lhs, rhs),
+            Expr::Bool(b) => self.visit_bool(*b),
+            Expr::Unary { op, expr, span: _ } => self.visit_unary_op(op, expr),
+            Expr::Binary {
+                op,
+                lhs,
+                rhs,
+                span: _,
+            } => self.visit_binary_op(op, lhs, rhs),
+            Expr::Lambda {
+                params,
+                body,
+                span: _,
+            } => self.visit_lambda(params, body),
+            Expr::Block {
+                bindings,
+                expr,
+                span: _,
+            } => self.visit_block_expr(bindings, expr),
+            Expr::Map { bindings, span: _ } => self.visit_map(bindings),
+            Expr::App { lhs, rhs, span: _ } => self.visit_app(lhs, rhs),
             Expr::Ident(ident) => self.visit_ident(ident),
             Expr::List(list) => self.visit_list(list),
-            Expr::MapAccess { expr, ident } => self.visit_map_access(expr, ident),
+            Expr::MapAccess {
+                expr,
+                ident,
+                span: _,
+            } => self.visit_map_access(expr, ident),
             Expr::IfExpr {
                 cond,
                 then_expr,
                 else_expr,
+                span: _,
             } => self.visit_if_expr(cond, then_expr, else_expr),
+            Expr::TypeIdent(_) => todo!(),
         }
     }
 
     fn visit_ident(&mut self, ident: &'ast Ident) -> Result<(), Self::Err>;
     fn visit_bind(&mut self, bind: &'ast Binding) -> Result<(), Self::Err>;
     fn visit_num(&mut self, num: &'ast Num) -> Result<(), Self::Err>;
-    fn visit_str(&mut self, sstr: &'ast Str) -> Result<(), Self::Err>;
+    fn visit_str(&mut self, str: &'ast Str) -> Result<(), Self::Err>;
+    fn visit_bool(&mut self, b: bool) -> Result<(), Self::Err>;
     fn visit_unary_op(&mut self, op: &'ast UnaryOp, expr: &'ast Expr) -> Result<(), Self::Err>;
     fn visit_binary_op(
         &mut self,
@@ -239,4 +298,5 @@ pub trait Visitor<'ast>: Sized {
         then_expr: &'ast Expr,
         else_expr: &'ast Expr,
     ) -> Result<(), Self::Err>;
+    fn visit_type_ident(&mut self, type_ident: &'ast TypeIdent) -> Result<(), Self::Err>;
 }

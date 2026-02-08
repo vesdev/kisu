@@ -1,13 +1,14 @@
 ```haskell
-ident = r/[a-zA-Z_][a-zA-Z0-9_]*/ ;
+ident = r/[a-z_][a-zA-Z0-9_]*/ ;
 number = r/[0-9]+(\.[0-9]+)?/ ;
 string = r/"([^"\\]|\\.)*"/ ;
-literal = number | string ;
+bool = "true" | "false" ;
+literal = number | string | bool ;
 key = ident | string;
 
 program = type_def* block ;
 
-type_ident = r/^[A-Z][a-zA-Z0-9_]*$/ ;
+type_ident = r/[A-Z][a-zA-Z0-9_]*/ ;
 type_def = "struct" type_ident "=" type_expr ;
 list_type = "[" type_expr "]" ;
 lambda_type = "fn" "(" (key constraint ",")* ")" "->" type_expr ;
