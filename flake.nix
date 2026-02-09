@@ -31,19 +31,7 @@
             overlays = [ (import rust-overlay) ];
           };
 
-          buildInputs = with pkgs; [
-            #wayland
-            libxkbcommon
-            wayland
-
-            #x11
-            xorg.libXcursor
-            xorg.libXi
-            xorg.libXrandr
-            xorg.libxcb
-            xorg.libX11
-
-          ];
+          buildInputs = with pkgs; [ ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
 
@@ -69,6 +57,18 @@
               packages = devPackages;
             };
           };
+
+          packages = rec {
+            kisu-cli = craneLib.buildPackage {
+              src = craneLib.cleanCargoSource ./.;
+              cargoBuildCommand = "cargo build --release -p kisu-cli";
+              pname = "kisu-cli";
+              inherit buildInputs;
+            };
+
+            default = kisu-cli;
+          };
+
         };
     };
 }

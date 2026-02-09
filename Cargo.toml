@@ -14,15 +14,15 @@ miette = { version = "7.6.0", features = ["fancy"] }
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 thiserror = "2.0.18"
 
+[dev-dependencies]
+indoc = "2.0.7"
+
 [features]
 default = []
 serde = ["dep:serde"]
 
 [workspace]
 members = ["cli"]
-
-[dev-dependencies]
-indoc = "2.0.7"
 
 [[test]]
 name = "deserialize"
