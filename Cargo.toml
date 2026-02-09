@@ -1,11 +1,11 @@
 
 [package]
 name = "kisu"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Lazy purely functional configuration language"
 license = "MIT"
-repository = "https://github.com/vesdev/kisu"
+repository = "https://github.com/kisu-is/kisu"
 
 
 [dependencies]
