@@ -89,7 +89,7 @@ fn structs() {
 
     assert_eval!(
         "
-        struct Test { a: Number; b: Number; }
+        struct Test { a: Number, b: Number, }
         Test {
             a = 10;
             b = 20;
@@ -102,7 +102,7 @@ fn structs() {
 fn struct_access() {
     assert_eval!(
         "
-        struct Test { a: Number; }
+        struct Test { a: Number, }
         (
             map = Test { a = 5; };
             map.a
@@ -120,7 +120,7 @@ fn struct_string_key() {
 
     assert_eval!(
         r#"
-        struct Test { "a": Number; "b": Number; }
+        struct Test { "a": Number, "b": Number, }
         Test {
             "a" = 10;
             "b" = 20;
@@ -138,7 +138,7 @@ fn inherit() {
 
     assert_eval!(
         r#"
-        struct Test { x: String; y: Number; }
+        struct Test { x: String, y: Number, }
         y = 10;
         Test {
             x = "hello";
@@ -159,8 +159,8 @@ fn inherit_string_key() {
 
     assert_eval!(
         r#"
-        struct Outer { "a b": String; c: Inner; }
-        struct Inner { "a b": String; }
+        struct Outer { "a b": String, c: Inner, }
+        struct Inner { "a b": String, }
 
         "a b" = "hello";
         Outer {

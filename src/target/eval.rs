@@ -390,7 +390,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
             fields_map.insert(bind.ident.name.clone(), forced_val);
         }
 
-        self.closure_mut()?.scope_pop()?; // Pop the scope
+        self.closure_mut()?.scope_pop()?;
         self.stack_push(Value::Struct(ty_name.name.clone(), fields_map));
         Ok(())
     }

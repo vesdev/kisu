@@ -76,157 +76,6 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         }
     }
 
-    fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_bool(n != 0.0),
-            _ => Err(de::Error::custom("expected a boolean")),
-        }
-    }
-
-    fn deserialize_i8<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_i8(n as i8),
-            _ => Err(de::Error::custom("expected an i8")),
-        }
-    }
-
-    fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_i16(n as i16),
-            _ => Err(de::Error::custom("expected an i16")),
-        }
-    }
-
-    fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_i32(n as i32),
-            _ => Err(de::Error::custom("expected an i32")),
-        }
-    }
-
-    fn deserialize_i64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_i64(n as i64),
-            _ => Err(de::Error::custom("expected an i64")),
-        }
-    }
-
-    fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_u8(n as u8),
-            _ => Err(de::Error::custom("expected a u8")),
-        }
-    }
-
-    fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_u16(n as u16),
-            _ => Err(de::Error::custom("expected a u16")),
-        }
-    }
-
-    fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_u32(n as u32),
-            _ => Err(de::Error::custom("expected a u32")),
-        }
-    }
-
-    fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_u64(n as u64),
-            _ => Err(de::Error::custom("expected a u64")),
-        }
-    }
-
-    fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_f32(n as f32),
-            _ => Err(de::Error::custom("expected an f32")),
-        }
-    }
-
-    fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Number(n) => visitor.visit_f64(n),
-            _ => Err(de::Error::custom("expected an f64")),
-        }
-    }
-
-    fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        self.deserialize_string(visitor)
-    }
-
-    fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        self.deserialize_string(visitor)
-    }
-
-    fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::String(s) => visitor.visit_string(s),
-            _ => Err(de::Error::custom("expected a string")),
-        }
-    }
-
-    fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        self.deserialize_byte_buf(visitor)
-    }
-
-    fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::String(s) => visitor.visit_bytes(s.as_bytes()),
-            _ => Err(de::Error::custom("expected a byte buffer")),
-        }
-    }
-
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -234,30 +83,6 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         match self.value {
             Value::Unit => visitor.visit_none(),
             _ => visitor.visit_some(self),
-        }
-    }
-
-    fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Unit => visitor.visit_unit(),
-            _ => Err(de::Error::custom("expected unit")),
-        }
-    }
-
-    fn deserialize_unit_struct<V>(
-        self,
-        _name: &'static str,
-        visitor: V,
-    ) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Unit => visitor.visit_unit(),
-            _ => Err(de::Error::custom("expected unit struct")),
         }
     }
 
@@ -270,51 +95,6 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         V: Visitor<'de>,
     {
         visitor.visit_newtype_struct(self)
-    }
-
-    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::List(l) => {
-                let seq_deserializer = SeqDeserializer::new(l);
-                visitor.visit_seq(seq_deserializer)
-            }
-            _ => Err(de::Error::custom("expected a list")),
-        }
-    }
-
-    fn deserialize_tuple<V>(self, _len: usize, _visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        Err(de::Error::custom("tuples are not supported"))
-    }
-
-    fn deserialize_tuple_struct<V>(
-        self,
-        _name: &'static str,
-        _len: usize,
-        _visitor: V,
-    ) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        Err(de::Error::custom("tuple structs are not supported"))
-    }
-
-    fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        match self.value {
-            Value::Struct(_name, map) => {
-                let map_deserializer = MapDeserializer::new(map);
-                visitor.visit_map(map_deserializer)
-            }
-            _ => Err(de::Error::custom("expected a map")),
-        }
     }
 
     fn deserialize_struct<V>(
@@ -341,18 +121,10 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
         Err(de::Error::custom("enums are not supported"))
     }
 
-    fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        self.deserialize_string(visitor)
-    }
-
-    fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-    where
-        V: Visitor<'de>,
-    {
-        self.deserialize_any(visitor)
+    serde::forward_to_deserialize_any! {
+        bool u8 u16 u32 u64 i8 i16 i32 i64 f32 f64 char str string seq
+        bytes byte_buf map unit
+        ignored_any unit_struct tuple_struct tuple identifier
     }
 }
 

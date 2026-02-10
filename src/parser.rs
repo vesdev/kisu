@@ -625,11 +625,9 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
         while !self.check(&TokenKind::BraceR) {
             fields.push(self.struct_field()?);
-            if self.check_consume(&TokenKind::Semicolon).is_none()
-                && !self.check(&TokenKind::BraceR)
-            {
+            if self.check_consume(&TokenKind::Comma).is_none() && !self.check(&TokenKind::BraceR) {
                 return Err(Error::UnexpectedToken {
-                    expected: TokenKind::Semicolon,
+                    expected: TokenKind::Comma,
                     found: self.token_kind().clone(),
                     span: self.token_span().clone().into(),
                 });
