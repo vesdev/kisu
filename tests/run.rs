@@ -1,4 +1,6 @@
 use kisu::{run, target::eval::Value};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 macro_rules! assert_eval {
     ($src:literal, $eq:expr) => {{
@@ -54,7 +56,7 @@ fn block() {
 
 #[test]
 fn string() {
-    assert_eval!(r#""hello""#, Value::String("hello".to_string()));
+    assert_eval!(r#""hello""#, Value::String(Rc::new("hello".to_string())));
 }
 
 #[test]
@@ -82,7 +84,6 @@ fn block_top_level() {
 
 #[test]
 fn structs() {
-    use std::collections::HashMap;
     let mut expected = HashMap::new();
     expected.insert("a".to_string(), Value::Number(10.0));
     expected.insert("b".to_string(), Value::Number(20.0));
@@ -94,7 +95,7 @@ fn structs() {
             a = 10;
             b = 20;
         }",
-        Value::Struct("Test".to_string(), expected)
+        Value::Struct(Rc::new("Test".to_string()), Rc::new(expected))
     );
 }
 
@@ -113,7 +114,6 @@ fn struct_access() {
 
 #[test]
 fn struct_string_key() {
-    use std::collections::HashMap;
     let mut expected = HashMap::new();
     expected.insert("a".to_string(), Value::Number(10.0));
     expected.insert("b".to_string(), Value::Number(20.0));
@@ -125,15 +125,14 @@ fn struct_string_key() {
             "a" = 10;
             "b" = 20;
         }"#,
-        Value::Struct("Test".to_string(), expected)
+        Value::Struct(Rc::new("Test".to_string()), Rc::new(expected))
     );
 }
 
 #[test]
 fn inherit() {
-    use std::collections::HashMap;
     let mut map = HashMap::new();
-    map.insert("x".to_string(), Value::String("hello".to_string()));
+    map.insert("x".to_string(), Value::String(Rc::new("hello".to_string())));
     map.insert("y".to_string(), Value::Number(10.0));
 
     assert_eval!(
@@ -144,18 +143,26 @@ fn inherit() {
             x = "hello";
             y;
         }"#,
-        Value::Struct("Test".to_string(), map)
+        Value::Struct(Rc::new("Test".to_string()), Rc::new(map))
     );
 }
 
 #[test]
 fn inherit_string_key() {
-    use std::collections::HashMap;
     let mut map = HashMap::new();
     let mut map2 = HashMap::new();
-    map2.insert("a b".to_string(), Value::String("hello".to_string()));
-    map.insert("a b".to_string(), Value::String("hello".to_string()));
-    map.insert("c".to_string(), Value::Struct("Inner".to_string(), map2));
+    map2.insert(
+        "a b".to_string(),
+        Value::String(Rc::new("hello".to_string())),
+    );
+    map.insert(
+        "a b".to_string(),
+        Value::String(Rc::new("hello".to_string())),
+    );
+    map.insert(
+        "c".to_string(),
+        Value::Struct(Rc::new("Inner".to_string()), Rc::new(map2)),
+    );
 
     assert_eval!(
         r#"
@@ -169,7 +176,7 @@ fn inherit_string_key() {
                 "a b";
             };
         }"#,
-        Value::Struct("Outer".to_string(), map)
+        Value::Struct(Rc::new("Outer".to_string()), Rc::new(map))
     );
 }
 
@@ -213,18 +220,18 @@ fn lambda_string_param() {
 fn string_concat() {
     assert_eval!(
         r#""Hello" + " world!""#,
-        Value::String("Hello world!".to_string())
+        Value::String(Rc::new("Hello world!".to_string()))
     );
 }
 
 #[test]
 fn list() {
     let expected = vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)];
-    assert_eval!(r#"[1, 2, 3]"#, Value::List(expected));
+    assert_eval!(r#"[1, 2, 3]"#, Value::List(Rc::new(expected)));
 }
 #[test]
 fn list_empty() {
-    assert_eval!(r#"[]"#, Value::List(vec![]));
+    assert_eval!(r#"[]"#, Value::List(Rc::new(vec![])));
 }
 
 #[test]

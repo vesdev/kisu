@@ -41,13 +41,13 @@ impl Thunk {
 #[derive(Debug, Clone)]
 pub enum Value {
     Number(f64),
-    String(String),
+    String(Rc<String>),
     Bool(bool),
-    Struct(String, HashMap<String, Value>),
-    List(Vec<Value>),
+    Struct(Rc<String>, Rc<HashMap<String, Value>>),
+    List(Rc<Vec<Value>>),
     Lambda {
-        params: Vec<String>,
-        body: Box<Expr>,
+        params: Rc<Vec<String>>,
+        body: Rc<Expr>,
         closure: Closure,
     },
     Thunk(Rc<Thunk>),
@@ -99,13 +99,13 @@ pub struct Scope {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Closure {
-    scope_stack: Vec<Scope>,
+    scope_stack: Rc<Vec<Scope>>,
 }
 
 impl Default for Closure {
     fn default() -> Self {
         Self {
-            scope_stack: vec![Scope::default()],
+            scope_stack: Rc::new(vec![Scope::default()]),
         }
     }
 }
@@ -125,19 +125,22 @@ impl Closure {
 
     #[inline]
     fn scope_insert(&mut self, key: String, value: Value) -> Result<(), Error> {
-        let scope = self.scope_stack.last_mut().ok_or(Error::StackUnderflow)?;
+        let scope = Rc::make_mut(&mut self.scope_stack)
+            .last_mut()
+            .ok_or(Error::StackUnderflow)?;
         scope.vars.insert(key, value);
         Ok(())
     }
 
     #[inline]
     fn scope_push(&mut self) {
-        self.scope_stack.push(Scope::default());
+        Rc::make_mut(&mut self.scope_stack).push(Scope::default());
     }
 
     #[inline]
     fn scope_pop(&mut self) -> Result<(), Error> {
-        self.scope_stack.pop().ok_or(Error::StackUnderflow)?;
+        let mut_stack = Rc::make_mut(&mut self.scope_stack);
+        mut_stack.pop().ok_or(Error::StackUnderflow)?;
         Ok(())
     }
 }
@@ -168,17 +171,17 @@ impl TreeWalker {
         match value {
             Value::List(values) => {
                 let mut list = Vec::with_capacity(values.len());
-                for val in values {
-                    list.push(self.force_consume(val)?);
+                for val in values.iter() {
+                    list.push(self.force_consume(val.clone())?);
                 }
-                Ok(Value::List(list))
+                Ok(Value::List(Rc::new(list)))
             }
             Value::Struct(name, value) => {
                 let mut map = HashMap::with_capacity(value.len());
-                for (key, val) in value {
-                    map.insert(key, self.force_consume(val)?);
+                for (key, val) in value.iter() {
+                    map.insert(key.clone(), self.force_consume(val.clone())?);
                 }
-                Ok(Value::Struct(name, map))
+                Ok(Value::Struct(name, Rc::new(map)))
             }
             _ => Ok(value),
         }
@@ -254,7 +257,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
     }
 
     fn visit_str(&mut self, str: &'ast Str) -> Result<(), Self::Err> {
-        self.stack_push(Value::String(str.0.clone()));
+        self.stack_push(Value::String(Rc::new(str.0.clone())));
         Ok(())
     }
 
@@ -306,7 +309,9 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         let result = match op {
             BinaryOp::Add => match (lhs_forced, rhs_forced) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
-                (Value::String(l), Value::String(r)) => Ok(Value::String(l + &r)),
+                (Value::String(l), Value::String(r)) => {
+                    Ok(Value::String(Rc::new(l.to_string() + &r)))
+                }
                 (l, r) => Err(Error::NotImplemented(
                     format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
                     (lhs.span().start..rhs.span().end).into(),
@@ -391,7 +396,10 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         }
 
         self.closure_mut()?.scope_pop()?;
-        self.stack_push(Value::Struct(ty_name.name.clone(), fields_map));
+        self.stack_push(Value::Struct(
+            Rc::new(ty_name.name.clone()),
+            Rc::new(fields_map),
+        ));
         Ok(())
     }
 
@@ -405,7 +413,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
         let result_val = match forced_val {
             Value::Lambda {
-                mut params,
+                params,
                 body,
                 closure,
             } => {
@@ -416,17 +424,18 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
                     ));
                 }
 
-                let param_name = params.remove(0);
+                let mut params_clone = (*params).clone();
+                let param_name = params_clone.remove(0);
 
                 self.closure_push(closure.clone());
                 self.closure_mut()?.scope_push();
 
                 self.closure_mut()?.scope_insert(param_name, arg_val)?;
 
-                if !params.is_empty() {
+                if !params_clone.is_empty() {
                     let new_lambda_closure = self.closure_mut()?.clone();
                     let new_lambda = Value::Lambda {
-                        params,
+                        params: Rc::new(params_clone),
                         body,
                         closure: new_lambda_closure,
                     };
@@ -487,8 +496,8 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         }
 
         let lambda = Value::Lambda {
-            params: names,
-            body: Box::new(body.clone()),
+            params: Rc::new(names),
+            body: Rc::new(body.clone()),
             closure,
         };
         self.stack_push(lambda);
@@ -502,7 +511,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
             let thunk = Rc::new(Thunk::new(Box::new(expr.clone()), closure.clone()));
             result.push(Value::Thunk(thunk));
         }
-        self.stack_push(Value::List(result));
+        self.stack_push(Value::List(Rc::new(result)));
         Ok(())
     }
 
