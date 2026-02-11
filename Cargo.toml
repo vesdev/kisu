@@ -11,6 +11,7 @@ repository = "https://github.com/kisu-is/kisu"
 [dependencies]
 logos = "0.16.0"
 miette = { version = "7.6.0", features = ["fancy"] }
+rpds = "1.2.0"
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 thiserror = "2.0.18"
 

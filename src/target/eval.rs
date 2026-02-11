@@ -3,6 +3,7 @@ use crate::ast::{
 };
 use crate::types::Type;
 use miette::SourceSpan;
+use rpds::HashTrieMap;
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -10,15 +11,15 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub struct Thunk {
     expr: Box<Expr>,
-    closure: Closure,
+    scope: Scope,
     value: OnceCell<Result<Value, Error>>,
 }
 
 impl Thunk {
-    pub fn new(expr: Box<Expr>, closure: Closure) -> Self {
+    pub fn new(expr: Box<Expr>, scope: Scope) -> Self {
         Self {
             expr,
-            closure,
+            scope,
             value: OnceCell::new(),
         }
     }
@@ -27,7 +28,7 @@ impl Thunk {
         self.value
             .get_or_init(|| {
                 let call_stack =
-                    std::mem::replace(&mut walker.call_stack, vec![self.closure.clone()]);
+                    std::mem::replace(&mut walker.call_stack, vec![self.scope.clone()]);
                 let result = walker
                     .visit_expr(&self.expr)
                     .and_then(|_| walker.stack_pop());
@@ -48,7 +49,7 @@ pub enum Value {
     Lambda {
         params: Rc<Vec<String>>,
         body: Rc<Expr>,
-        closure: Closure,
+        scope: Scope,
     },
     Thunk(Rc<Thunk>),
     Unit,
@@ -65,12 +66,12 @@ impl PartialEq for Value {
                 Value::Lambda {
                     params: p1,
                     body: b1,
-                    closure: c1,
+                    scope: c1,
                 },
                 Value::Lambda {
                     params: p2,
                     body: b2,
-                    closure: c2,
+                    scope: c2,
                 },
             ) => p1 == p2 && b1 == b2 && c1 == c2,
             (Value::Unit, Value::Unit) => true,
@@ -85,75 +86,43 @@ pub enum Error {
     #[error("feature not implemented: {0}")]
     NotImplemented(String, #[label] SourceSpan),
     #[error("identifier '{0}' not found")]
-    IdentifierNotFound(String, #[label] SourceSpan),
+    IdentifierNotFound(String),
     #[error("stack underflow")]
     StackUnderflow,
     #[error("tried accessing a struct with invalid field")]
     InvalidStructAccess(#[label] SourceSpan),
 }
 
-#[derive(Debug, PartialEq, Default, Clone)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct Scope {
-    pub vars: HashMap<String, Value>,
+    vars: HashTrieMap<String, Value>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct Closure {
-    scope_stack: Rc<Vec<Scope>>,
-}
+impl Scope {
+    #[inline]
+    pub fn get(&self, name: &str) -> Result<&Value, Error> {
+        self.vars
+            .get(name)
+            .ok_or(Error::IdentifierNotFound(name.to_owned()))
+    }
 
-impl Default for Closure {
-    fn default() -> Self {
+    #[inline]
+    pub fn insert(&self, key: String, value: Value) -> Self {
         Self {
-            scope_stack: Rc::new(vec![Scope::default()]),
+            vars: self.vars.insert(key, value),
         }
     }
 }
 
-impl Closure {
-    #[inline]
-    fn scope_get(&self, name: &str) -> Result<&Value, Error> {
-        self.scope_stack
-            .iter()
-            .rev()
-            .find_map(|scope| scope.vars.get(name))
-            .ok_or(Error::IdentifierNotFound(
-                name.to_owned(),
-                SourceSpan::new(0.into(), 0),
-            ))
-    }
-
-    #[inline]
-    fn scope_insert(&mut self, key: String, value: Value) -> Result<(), Error> {
-        let scope = Rc::make_mut(&mut self.scope_stack)
-            .last_mut()
-            .ok_or(Error::StackUnderflow)?;
-        scope.vars.insert(key, value);
-        Ok(())
-    }
-
-    #[inline]
-    fn scope_push(&mut self) {
-        Rc::make_mut(&mut self.scope_stack).push(Scope::default());
-    }
-
-    #[inline]
-    fn scope_pop(&mut self) -> Result<(), Error> {
-        let mut_stack = Rc::make_mut(&mut self.scope_stack);
-        mut_stack.pop().ok_or(Error::StackUnderflow)?;
-        Ok(())
-    }
-}
-
 pub struct TreeWalker {
-    call_stack: Vec<Closure>,
+    call_stack: Vec<Scope>,
     stack: Vec<Value>,
 }
 
 impl Default for TreeWalker {
     fn default() -> Self {
         Self {
-            call_stack: vec![Closure::default()],
+            call_stack: vec![Scope::default()],
             stack: Default::default(),
         }
     }
@@ -196,22 +165,22 @@ impl TreeWalker {
     }
 
     #[inline]
-    fn closure(&mut self) -> Result<&Closure, Error> {
+    fn scope(&self) -> Result<&Scope, Error> {
         self.call_stack.last().ok_or(Error::StackUnderflow)
     }
 
     #[inline]
-    fn closure_mut(&mut self) -> Result<&mut Closure, Error> {
-        self.call_stack.last_mut().ok_or(Error::StackUnderflow)
+    fn scope_replace(&mut self, scope: Scope) {
+        *self.call_stack.last_mut().unwrap() = scope;
     }
 
     #[inline]
-    fn closure_push(&mut self, closure: Closure) {
-        self.call_stack.push(closure)
+    fn scope_push(&mut self, scope: Scope) {
+        self.call_stack.push(scope)
     }
 
     #[inline]
-    fn closure_pop(&mut self) -> Result<Closure, Error> {
+    fn scope_pop(&mut self) -> Result<Scope, Error> {
         self.call_stack.pop().ok_or(Error::StackUnderflow)
     }
 
@@ -237,17 +206,17 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
     }
 
     fn visit_ident(&mut self, ident: &'ast ast::Ident) -> Result<(), Self::Err> {
-        let val = self.closure_mut()?.scope_get(&ident.name)?.clone();
+        let val = self.scope()?.get(&ident.name)?.clone();
         let forced_val = self.force(val)?;
         self.stack_push(forced_val);
         Ok(())
     }
 
     fn visit_bind(&mut self, bind: &'ast Binding) -> Result<(), Self::Err> {
-        let closure = self.closure()?.clone();
-        let thunk = Rc::new(Thunk::new(bind.expr.clone(), closure));
-        self.closure_mut()?
-            .scope_insert(bind.ident.name.clone(), Value::Thunk(thunk))?;
+        let scope = self.scope()?.clone();
+        let thunk = Rc::new(Thunk::new(bind.expr.clone(), scope.clone()));
+        let new_scope = scope.insert(bind.ident.name.clone(), Value::Thunk(thunk));
+        self.scope_replace(new_scope);
         Ok(())
     }
 
@@ -382,20 +351,21 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         ty_name: &'ast TypeIdent,
         fields: &'ast [Binding],
     ) -> Result<(), Self::Err> {
-        self.closure_mut()?.scope_push();
+        self.scope_push(self.scope()?.clone());
 
         for bind in fields {
             self.visit_bind(bind)?;
         }
 
+        let final_scope = self.scope()?.clone();
         let mut fields_map = HashMap::new();
         for bind in fields {
-            let val = self.closure()?.scope_get(&bind.ident.name)?.clone();
+            let val = final_scope.get(&bind.ident.name)?.clone();
             let forced_val = self.force(val)?;
             fields_map.insert(bind.ident.name.clone(), forced_val);
         }
 
-        self.closure_mut()?.scope_pop()?;
+        self.scope_pop()?;
         self.stack_push(Value::Struct(
             Rc::new(ty_name.name.clone()),
             Rc::new(fields_map),
@@ -407,15 +377,15 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         self.visit_expr(lhs)?;
         let val = self.stack_pop()?;
         let forced_val = self.force(val)?;
-        let closure = self.closure()?.clone();
-        let arg_thunk = Rc::new(Thunk::new(Box::new(rhs.clone()), closure));
+        let scope = self.scope()?.clone();
+        let arg_thunk = Rc::new(Thunk::new(Box::new(rhs.clone()), scope));
         let arg_val = Value::Thunk(arg_thunk);
 
         let result_val = match forced_val {
             Value::Lambda {
                 params,
                 body,
-                closure,
+                scope,
             } => {
                 if params.is_empty() {
                     return Err(Error::NotImplemented(
@@ -427,24 +397,22 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
                 let mut params_clone = (*params).clone();
                 let param_name = params_clone.remove(0);
 
-                self.closure_push(closure.clone());
-                self.closure_mut()?.scope_push();
-
-                self.closure_mut()?.scope_insert(param_name, arg_val)?;
+                let new_scope = scope.insert(param_name, arg_val);
+                self.scope_push(new_scope);
 
                 if !params_clone.is_empty() {
-                    let new_lambda_closure = self.closure_mut()?.clone();
+                    let new_lambda_scope = self.scope()?.clone();
                     let new_lambda = Value::Lambda {
                         params: Rc::new(params_clone),
                         body,
-                        closure: new_lambda_closure,
+                        scope: new_lambda_scope,
                     };
-                    self.closure_pop()?;
+                    self.scope_pop()?;
                     new_lambda
                 } else {
                     self.visit_expr(&body)?;
                     let final_result = self.stack_pop()?;
-                    self.closure_pop()?;
+                    self.scope_pop()?;
                     final_result
                 }
             }
@@ -465,25 +433,23 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         bindings: &'ast [Binding],
         expr: &'ast Expr,
     ) -> Result<(), Self::Err> {
-        self.closure_mut()?.scope_push();
+        self.scope_push(self.scope()?.clone());
+
         for binding in bindings {
             self.visit_bind(binding)?;
-            let value = self.closure()?.scope_get(&binding.ident.name)?.clone();
-            self.closure_mut()?
-                .scope_insert(binding.ident.name.clone(), value)?;
         }
 
         self.visit_expr(expr)?;
         let value = self.stack_pop()?;
 
-        self.closure_mut()?.scope_pop()?;
+        self.scope_pop()?;
 
         self.stack_push(value);
         Ok(())
     }
 
     fn visit_lambda(&mut self, params: &'ast [Param], body: &'ast Expr) -> Result<(), Self::Err> {
-        let mut closure = self.closure()?.clone();
+        let mut scope = self.scope()?.clone();
         let mut names = vec![];
 
         for param in params {
@@ -491,14 +457,14 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
             if let Some(default) = &param.expr {
                 self.visit_expr(default)?;
                 let default = self.stack_pop()?;
-                closure.scope_insert(param.ident.name.clone(), default)?;
+                scope = scope.insert(param.ident.name.clone(), default);
             }
         }
 
         let lambda = Value::Lambda {
             params: Rc::new(names),
             body: Rc::new(body.clone()),
-            closure,
+            scope,
         };
         self.stack_push(lambda);
         Ok(())
@@ -506,9 +472,9 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
     fn visit_list(&mut self, list: &'ast ast::List) -> Result<(), Self::Err> {
         let mut result = vec![];
-        let closure = self.closure()?.clone();
+        let scope = self.scope()?.clone();
         for expr in &list.exprs {
-            let thunk = Rc::new(Thunk::new(Box::new(expr.clone()), closure.clone()));
+            let thunk = Rc::new(Thunk::new(Box::new(expr.clone()), scope.clone()));
             result.push(Value::Thunk(thunk));
         }
         self.stack_push(Value::List(Rc::new(result)));

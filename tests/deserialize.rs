@@ -6,7 +6,7 @@ fn structs() {
     }
 
     let config: Config =
-        kisu::from_str(r#"struct Config { name: String; } Config { name = "Joe"; }"#).unwrap();
+        kisu::from_str(r#"struct Config { name: String, } Config { name = "Joe"; }"#).unwrap();
 
     assert_eq!(
         config,
@@ -30,8 +30,8 @@ fn struct_nested() {
 
     let config: Config = kisu::from_str(
         r#"
-        struct User { name: String; }
-        struct Config { user: User; }
+        struct User { name: String, }
+        struct Config { user: User, }
         Config {
             user = User { name = "Joe"; };
         }
@@ -71,7 +71,7 @@ fn list() {
     }
 
     let config: Config = kisu::from_str(
-        r#"struct Config { features: [String]; } Config { features = [ "derive" ]; }"#,
+        r#"struct Config { features: [String], } Config { features = [ "derive" ]; }"#,
     )
     .unwrap();
 

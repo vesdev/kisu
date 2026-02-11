@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use miette::Diagnostic;
 use serde::de::{self, DeserializeOwned, IntoDeserializer, Visitor};
@@ -59,7 +60,7 @@ impl<'de, 'a> de::Deserializer<'de> for Deserializer<'a> {
     {
         match self.value {
             Value::Number(n) => visitor.visit_f64(n),
-            Value::String(s) => visitor.visit_string(s),
+            Value::String(s) => visitor.visit_string(s.to_string()),
             Value::Struct(_name, map) => {
                 let map_deserializer = MapDeserializer::new(map);
                 visitor.visit_map(map_deserializer)
@@ -135,9 +136,14 @@ struct MapDeserializer<'de> {
 }
 
 impl<'de> MapDeserializer<'de> {
-    fn new(map: HashMap<String, Value>) -> Self {
+    fn new(map: Rc<HashMap<String, Value>>) -> Self {
+        let map_owned = match Rc::try_unwrap(map) {
+            Ok(m) => m,
+            Err(rc_map) => (*rc_map).clone(),
+        };
+
         MapDeserializer {
-            iter: map.into_iter(),
+            iter: map_owned.into_iter(),
             next_value: None,
             phantom: std::marker::PhantomData,
         }
@@ -152,8 +158,8 @@ impl<'de> de::MapAccess<'de> for MapDeserializer<'de> {
         K: de::DeserializeSeed<'de>,
     {
         if let Some((key, value)) = self.iter.next() {
-            self.next_value = Some(value);
-            seed.deserialize(key.into_deserializer()).map(Some)
+            self.next_value = Some(value.clone());
+            seed.deserialize(key.clone().into_deserializer()).map(Some)
         } else {
             Ok(None)
         }
@@ -177,9 +183,14 @@ struct SeqDeserializer<'de> {
 }
 
 impl<'de> SeqDeserializer<'de> {
-    fn new(list: Vec<Value>) -> Self {
+    fn new(list: Rc<Vec<Value>>) -> Self {
+        let list_owned = match Rc::try_unwrap(list) {
+            Ok(l) => l,
+            Err(rc_list) => (*rc_list).clone(),
+        };
+
         SeqDeserializer {
-            iter: list.into_iter(),
+            iter: list_owned.into_iter(),
             phantom: std::marker::PhantomData,
         }
     }
@@ -195,7 +206,7 @@ impl<'de> de::SeqAccess<'de> for SeqDeserializer<'de> {
         let value = self.iter.next();
 
         match value {
-            Some(value) => seed.deserialize(Deserializer::new(value)).map(Some),
+            Some(value) => seed.deserialize(Deserializer::new(value.clone())).map(Some),
             None => Ok(None),
         }
     }
