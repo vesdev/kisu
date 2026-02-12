@@ -4,14 +4,14 @@ use std::rc::Rc;
 use miette::Diagnostic;
 use serde::de::{self, DeserializeOwned, IntoDeserializer, Visitor};
 
-use crate::{deserialize, eval::Value, run};
+use crate::{eval::Value, run};
 
 pub fn from_str<T>(source: &str) -> Result<T, miette::Error>
 where
     T: DeserializeOwned,
 {
     let value = run(source)?;
-    let deserializer = deserialize::Deserializer::new(value);
+    let deserializer = Deserializer::new(value);
     Ok(T::deserialize(deserializer)?)
 }
 

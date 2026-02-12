@@ -9,15 +9,15 @@ use crate::{
 };
 
 pub mod ast;
-#[cfg(feature = "serde")]
-pub mod deserialize;
 pub mod lexer;
 pub mod parser;
+#[cfg(feature = "serde")]
+pub mod serialize;
 pub mod target;
 pub mod types;
 
 #[cfg(feature = "serde")]
-pub use deserialize::from_str;
+pub use serialize::de::from_str;
 
 /// run kisu program with pretty printed errors
 pub fn run(source: &str) -> Result<Value, miette::Error> {
@@ -48,7 +48,7 @@ pub enum Error {
     #[cfg(feature = "serde")]
     #[error(transparent)]
     #[diagnostic(transparent)]
-    Deserialize(#[from] deserialize::Error),
+    Deserialize(#[from] serialize::de::Error),
     #[error(transparent)]
     #[diagnostic(transparent)]
     Type(#[from] types::Error),
