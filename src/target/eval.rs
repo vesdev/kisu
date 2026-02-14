@@ -1,6 +1,5 @@
-use crate::ast::{
-    self, BinaryOp, Binding, Expr, Num, Param, Program, Str, StructDef, TypeIdent, UnaryOp, Visitor,
-};
+use crate::ast::typed;
+use crate::ast::typed::Visitor;
 use crate::types::Type;
 use miette::SourceSpan;
 use rpds::HashTrieMap;
@@ -11,13 +10,13 @@ use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct Thunk {
-    expr: Box<Expr>,
+    expr: Box<typed::Expr>,
     scope: Scope,
     value: OnceCell<Result<Value, Error>>,
 }
 
 impl Thunk {
-    pub fn new(expr: Box<Expr>, scope: Scope) -> Self {
+    pub fn new(expr: Box<typed::Expr>, scope: Scope) -> Self {
         Self {
             expr,
             scope,
@@ -49,7 +48,7 @@ pub enum Value {
     List(Rc<Vec<Value>>),
     Lambda {
         params: Rc<Vec<String>>,
-        body: Rc<Expr>,
+        body: Rc<typed::Expr>,
         scope: Scope,
     },
     Thunk(Rc<Thunk>),
@@ -208,51 +207,46 @@ impl TreeWalker {
     }
 }
 
-impl<'ast> ast::Visitor<'ast> for TreeWalker {
+impl<'ast> typed::Visitor<'ast> for TreeWalker {
     type Err = Error;
 
-    fn visit_program(&mut self, program: &'ast Program) -> Result<(), Self::Err> {
-        for s in &program.structs {
-            self.visit_struct_def(s)?;
-        }
+    fn visit_program(&mut self, program: &'ast typed::Program) -> Result<(), Self::Err> {
         self.visit_expr(&program.expr)
     }
 
-    fn visit_ident(&mut self, ident: &'ast ast::Ident) -> Result<(), Self::Err> {
+    fn visit_ident(&mut self, ident: &'ast typed::Ident) -> Result<(), Self::Err> {
         let val = self.scope()?.get(&ident.name)?.clone();
         let forced_val = self.force(val)?;
         self.stack_push(forced_val);
         Ok(())
     }
 
-    fn visit_bind(&mut self, bind: &'ast Binding) -> Result<(), Self::Err> {
+    fn visit_bind(&mut self, bind: &'ast typed::Binding) -> Result<(), Self::Err> {
         let scope = self.scope()?.clone();
 
-        if bind.kind == ast::BindingKind::Rec {
+        if bind.kind == typed::BindingKind::Rec {
             let slot = Rc::new(RefCell::new(None));
             let rec_name = bind.ident.name.clone();
             let rec_scope = scope.insert(rec_name.clone(), Value::RecThunk(slot.clone()));
 
             let thunk = Rc::new(Thunk::new(bind.expr.clone(), rec_scope));
-
             *slot.borrow_mut() = Some(thunk.clone());
 
             self.scope_replace(scope.insert(rec_name, Value::Thunk(thunk)));
-            return Ok(());
+        } else {
+            let thunk = Rc::new(Thunk::new(bind.expr.clone(), scope.clone()));
+            let new_scope = scope.insert(bind.ident.name.clone(), Value::Thunk(thunk));
+            self.scope_replace(new_scope);
         }
-
-        let thunk = Rc::new(Thunk::new(bind.expr.clone(), scope.clone()));
-        let new_scope = scope.insert(bind.ident.name.clone(), Value::Thunk(thunk));
-        self.scope_replace(new_scope);
         Ok(())
     }
 
-    fn visit_num(&mut self, num: &'ast Num) -> Result<(), Self::Err> {
+    fn visit_num(&mut self, num: &'ast typed::Num) -> Result<(), Self::Err> {
         self.stack_push(Value::Number(num.0));
         Ok(())
     }
 
-    fn visit_str(&mut self, str: &'ast Str) -> Result<(), Self::Err> {
+    fn visit_str(&mut self, str: &'ast typed::Str) -> Result<(), Self::Err> {
         self.stack_push(Value::String(Rc::new(str.0.clone())));
         Ok(())
     }
@@ -262,25 +256,29 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         Ok(())
     }
 
-    fn visit_unary_op(&mut self, op: &'ast UnaryOp, expr: &'ast Expr) -> Result<(), Self::Err> {
+    fn visit_unary_op(
+        &mut self,
+        op: &'ast typed::UnaryOp,
+        expr: &'ast typed::Expr,
+    ) -> Result<(), Self::Err> {
         self.visit_expr(expr)?;
         let val = self.stack_pop()?;
         let forced_val = self.force(val)?;
 
         let result = match op {
-            UnaryOp::Neg => match forced_val {
+            typed::UnaryOp::Neg => match forced_val {
                 Value::Number(n) => Ok(Value::Number(-n)),
                 _ => Err(Error::NotImplemented(
                     format!("Unary op {:?} for value {:?}", op, forced_val),
-                    expr.span().into(),
+                    expr.span.clone().into(),
                 )),
             },
-            UnaryOp::Not => match forced_val {
+            typed::UnaryOp::Not => match forced_val {
                 Value::Number(n) => Ok(Value::Bool(n == 0.0)),
                 Value::Bool(b) => Ok(Value::Bool(!b)),
                 _ => Err(Error::NotImplemented(
                     format!("Unary op {:?} for value {:?}", op, forced_val),
-                    expr.span().into(),
+                    expr.span.clone().into(),
                 )),
             },
         };
@@ -291,9 +289,9 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
     fn visit_binary_op(
         &mut self,
-        op: &'ast BinaryOp,
-        lhs: &'ast Expr,
-        rhs: &'ast Expr,
+        op: &'ast typed::BinaryOp,
+        lhs: &'ast typed::Expr,
+        rhs: &'ast typed::Expr,
     ) -> Result<(), Self::Err> {
         self.visit_expr(lhs)?;
         self.visit_expr(rhs)?;
@@ -303,68 +301,68 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         let lhs_forced = self.force(lhs_val)?;
 
         let result = match op {
-            BinaryOp::Add => match (lhs_forced, rhs_forced) {
+            typed::BinaryOp::Add => match (lhs_forced, rhs_forced) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
                 (Value::String(l), Value::String(r)) => {
                     Ok(Value::String(Rc::new(l.to_string() + &r)))
                 }
                 (l, r) => Err(Error::NotImplemented(
                     format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
-                    (lhs.span().start..rhs.span().end).into(),
+                    (lhs.span.start..rhs.span.end).into(),
                 )),
             },
-            BinaryOp::Sub => match (lhs_forced, rhs_forced) {
+            typed::BinaryOp::Sub => match (lhs_forced, rhs_forced) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l - r)),
                 (l, r) => Err(Error::NotImplemented(
                     format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
-                    (lhs.span().start..rhs.span().end).into(),
+                    (lhs.span.start..rhs.span.end).into(),
                 )),
             },
-            BinaryOp::Mul => match (lhs_forced, rhs_forced) {
+            typed::BinaryOp::Mul => match (lhs_forced, rhs_forced) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l * r)),
                 (l, r) => Err(Error::NotImplemented(
                     format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
-                    (lhs.span().start..rhs.span().end).into(),
+                    (lhs.span.start..rhs.span.end).into(),
                 )),
             },
-            BinaryOp::Div => match (lhs_forced, rhs_forced) {
+            typed::BinaryOp::Div => match (lhs_forced, rhs_forced) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l / r)),
                 (l, r) => Err(Error::NotImplemented(
                     format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
-                    (lhs.span().start..rhs.span().end).into(),
+                    (lhs.span.start..rhs.span.end).into(),
                 )),
             },
-            BinaryOp::Eq => Ok(Value::Bool(lhs_forced == rhs_forced)),
-            BinaryOp::NotEq => Ok(Value::Bool(lhs_forced != rhs_forced)),
-            BinaryOp::Lt => match (lhs_forced, rhs_forced) {
+            typed::BinaryOp::Eq => Ok(Value::Bool(lhs_forced == rhs_forced)),
+            typed::BinaryOp::NotEq => Ok(Value::Bool(lhs_forced != rhs_forced)),
+            typed::BinaryOp::Lt => match (lhs_forced, rhs_forced) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Bool(l < r)),
                 (l, r) => Err(Error::NotImplemented(
                     format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
-                    (lhs.span().start..rhs.span().end).into(),
+                    (lhs.span.start..rhs.span.end).into(),
                 )),
             },
-            BinaryOp::Gt => match (lhs_forced, rhs_forced) {
+            typed::BinaryOp::Gt => match (lhs_forced, rhs_forced) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Bool(l > r)),
                 (l, r) => Err(Error::NotImplemented(
                     format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
-                    (lhs.span().start..rhs.span().end).into(),
+                    (lhs.span.start..rhs.span.end).into(),
                 )),
             },
-            BinaryOp::LtEq => match (lhs_forced, rhs_forced) {
+            typed::BinaryOp::LtEq => match (lhs_forced, rhs_forced) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Bool(l <= r)),
                 (l, r) => Err(Error::NotImplemented(
                     format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
-                    (lhs.span().start..rhs.span().end).into(),
+                    (lhs.span.start..rhs.span.end).into(),
                 )),
             },
-            BinaryOp::GtEq => match (lhs_forced, rhs_forced) {
+            typed::BinaryOp::GtEq => match (lhs_forced, rhs_forced) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Bool(l >= r)),
                 (l, r) => Err(Error::NotImplemented(
                     format!("Binary op {:?} for values {:?} and {:?}", op, l, r),
-                    (lhs.span().start..rhs.span().end).into(),
+                    (lhs.span.start..rhs.span.end).into(),
                 )),
             },
-            BinaryOp::Dot => {
+            typed::BinaryOp::Dot => {
                 unreachable!();
             }
         };
@@ -375,8 +373,8 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
     fn visit_struct_expr(
         &mut self,
-        ty_name: &'ast TypeIdent,
-        fields: &'ast [Binding],
+        fields: &'ast [typed::Binding],
+        struct_type: &'ast Type,
     ) -> Result<(), Self::Err> {
         self.scope_push(self.scope()?.clone());
 
@@ -394,13 +392,17 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
         self.scope_pop()?;
         self.stack_push(Value::Struct(
-            Rc::new(ty_name.name.clone()),
+            Rc::new(struct_type.to_string()),
             Rc::new(fields_map),
         ));
         Ok(())
     }
 
-    fn visit_app(&mut self, lhs: &'ast Expr, rhs: &'ast Expr) -> Result<(), Self::Err> {
+    fn visit_app(
+        &mut self,
+        lhs: &'ast typed::Expr,
+        rhs: &'ast typed::Expr,
+    ) -> Result<(), Self::Err> {
         self.visit_expr(lhs)?;
         let val = self.stack_pop()?;
         let forced_val = self.force(val)?;
@@ -417,7 +419,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
                 if params.is_empty() {
                     return Err(Error::NotImplemented(
                         "Too many arguments for lambda".to_string(),
-                        (lhs.span().start..rhs.span().end).into(),
+                        (lhs.span.start..rhs.span.end).into(),
                     ));
                 }
 
@@ -446,7 +448,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
             _ => {
                 return Err(Error::NotImplemented(
                     format!("Cannot call value of type {:?}", forced_val),
-                    (lhs.span().start..rhs.span().end).into(),
+                    (lhs.span.start..rhs.span.end).into(),
                 ));
             }
         };
@@ -457,8 +459,8 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
     fn visit_block_expr(
         &mut self,
-        bindings: &'ast [Binding],
-        expr: &'ast Expr,
+        bindings: &'ast [typed::Binding],
+        expr: &'ast typed::Expr,
     ) -> Result<(), Self::Err> {
         self.scope_push(self.scope()?.clone());
 
@@ -475,18 +477,13 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         Ok(())
     }
 
-    fn visit_lambda(&mut self, params: &'ast [Param], body: &'ast Expr) -> Result<(), Self::Err> {
-        let mut scope = self.scope()?.clone();
-        let mut names = vec![];
-
-        for param in params {
-            names.push(param.ident.name.clone());
-            if let Some(default) = &param.expr {
-                self.visit_expr(default)?;
-                let default = self.stack_pop()?;
-                scope = scope.insert(param.ident.name.clone(), default);
-            }
-        }
+    fn visit_lambda(
+        &mut self,
+        params: &'ast [typed::Param],
+        body: &'ast typed::Expr,
+    ) -> Result<(), Self::Err> {
+        let scope = self.scope()?.clone();
+        let names = params.iter().map(|p| p.ident.name.clone()).collect();
 
         let lambda = Value::Lambda {
             params: Rc::new(names),
@@ -497,7 +494,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         Ok(())
     }
 
-    fn visit_list(&mut self, list: &'ast ast::List) -> Result<(), Self::Err> {
+    fn visit_list(&mut self, list: &'ast typed::List) -> Result<(), Self::Err> {
         let mut result = vec![];
         let scope = self.scope()?.clone();
         for expr in &list.exprs {
@@ -510,8 +507,8 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
     fn visit_struct_access(
         &mut self,
-        expr: &'ast Expr,
-        ident: &'ast ast::Ident,
+        expr: &'ast typed::Expr,
+        ident: &'ast typed::Ident,
     ) -> Result<(), Self::Err> {
         self.visit_expr(expr)?;
         let val = self.stack_pop()?;
@@ -532,9 +529,9 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
 
     fn visit_if_expr(
         &mut self,
-        cond: &'ast Expr,
-        then_expr: &'ast Expr,
-        else_expr: &'ast Expr,
+        cond: &'ast typed::Expr,
+        then_expr: &'ast typed::Expr,
+        else_expr: &'ast typed::Expr,
     ) -> Result<(), Self::Err> {
         self.visit_expr(cond)?;
         let cond_val = self.stack_pop()?;
@@ -545,7 +542,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
             _ => {
                 return Err(Error::NotImplemented(
                     "Condition in if/else must be a bool".to_string(),
-                    cond.span().into(),
+                    cond.span.clone().into(),
                 ));
             }
         };
@@ -559,12 +556,7 @@ impl<'ast> ast::Visitor<'ast> for TreeWalker {
         Ok(())
     }
 
-    fn visit_type(&mut self, _ty: &'ast Type) -> Result<(), Self::Err> {
-        // no runtime type checking
-        Ok(())
-    }
-
-    fn visit_struct_def(&mut self, _struct_def: &'ast StructDef) -> Result<(), Self::Err> {
+    fn visit_struct_def(&mut self, _struct_def: &'ast typed::StructDef) -> Result<(), Self::Err> {
         Ok(())
     }
 }

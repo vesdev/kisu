@@ -1,7 +1,7 @@
-use crate::ast::{
-    self, BinaryOp, Binding, Expr, Ident, List, Num, Param, Program, Str, StructDef, TypeIdent,
-    UnaryOp, Visitor,
+use crate::ast::untyped::{
+    BinaryOp, Binding, Expr, Ident, List, Num, Param, Program, Str, UnaryOp, Visitor,
 };
+use crate::ast::{typed, untyped};
 use miette::SourceSpan;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -11,7 +11,7 @@ pub enum Type {
     Var(u32),
     Lambda(Box<Type>, Box<Type>),
     List(Box<Type>),
-    Struct(ast::TypeIdent),
+    Struct(typed::TypeIdent),
     Number,
     String,
     Bool,
@@ -78,29 +78,35 @@ pub struct TypeChecker {
     subst: HashMap<u32, Type>,
     count: u32,
     scope: Scope,
-    ty: Option<Type>,
-    struct_defs: HashMap<String, StructDef>,
+    program: Option<typed::Program>,
+    struct_defs: HashMap<String, typed::StructDef>,
+    last_expr: Option<typed::Expr>,
+    last_binding: Option<typed::Binding>,
 }
 
 impl TypeChecker {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         subst: HashMap<u32, Type>,
         count: u32,
         scope: Scope,
-        ty: Option<Type>,
-        struct_defs: HashMap<String, StructDef>,
+        program: Option<typed::Program>,
+        struct_defs: HashMap<String, typed::StructDef>,
+        last_expr: Option<typed::Expr>,
+        last_binding: Option<typed::Binding>,
     ) -> Self {
         Self {
             subst,
             count,
             scope,
-            ty,
+            program,
             struct_defs,
+            last_expr,
+            last_binding,
         }
     }
-    pub fn check(&mut self, program: &Program) -> Result<Type, Error> {
-        self.visit_program(program)?;
-        Ok(self.ty.take().unwrap())
+    pub fn consume(mut self) -> Result<typed::Program, Error> {
+        Ok(self.program.take().unwrap())
     }
 
     fn new_var(&mut self) -> Type {
@@ -277,15 +283,35 @@ impl<'ast> Visitor<'ast> for TypeChecker {
     type Err = Error;
 
     fn visit_program(&mut self, program: &'ast Program) -> Result<(), Self::Err> {
+        let mut structs = Vec::new();
         for s in &program.structs {
             self.visit_struct_def(s)?;
+            let name = s.name.name.clone();
+            structs.push(self.struct_defs.get(&name).unwrap().clone());
         }
-        self.visit_expr(&program.expr)
+
+        self.visit_expr(&program.expr)?;
+        let ty_expr = self.last_expr.take().unwrap();
+
+        self.program = Some(typed::Program {
+            expr: ty_expr,
+            structs,
+        });
+        Ok(())
     }
 
     fn visit_ident(&mut self, ident: &'ast Ident) -> Result<(), Self::Err> {
         if let Some(scheme) = self.scope.get(&ident.name).cloned() {
-            self.ty = Some(self.instantiate(&scheme));
+            let ty = self.instantiate(&scheme);
+            self.last_expr = Some(typed::Expr {
+                kind: Box::new(typed::ExprKind::Ident(typed::Ident {
+                    name: ident.name.clone(),
+                    span: ident.span.clone(),
+                    ty: ty.clone(),
+                })),
+                span: ident.span.clone(),
+                ty,
+            });
             Ok(())
         } else {
             Err(Error::UndefinedIdent {
@@ -295,92 +321,171 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         }
     }
 
-    fn visit_bind(&mut self, bind: &'ast ast::Binding) -> Result<(), Self::Err> {
+    fn visit_bind(&mut self, bind: &'ast untyped::Binding) -> Result<(), Self::Err> {
         let mut checker = TypeChecker::new(
             self.subst.clone(),
             self.count,
             self.scope.clone(),
             None,
             self.struct_defs.clone(),
+            None,
+            None,
         );
 
-        if bind.kind == ast::BindingKind::Rec {
-            let rec_var = checker.new_var();
-            let rec_scheme = Scheme {
+        if bind.kind == untyped::BindingKind::Rec {
+            let tv = checker.new_var();
+            let scheme = Scheme {
                 vars: vec![],
-                ty: rec_var.clone(),
+                ty: tv.clone(),
             };
-            checker.scope.extend(bind.ident.name.clone(), rec_scheme);
-
+            checker.scope.extend(bind.ident.name.clone(), scheme);
             checker.visit_expr(&bind.expr)?;
-            let inferred_ty = checker.ty.take().unwrap();
-            checker.unify(&rec_var, &inferred_ty, bind.ident.span.clone().into())?;
-            let ty = checker.apply(&rec_var);
+
+            let ty_expr = checker.last_expr.take().unwrap();
+            let inferred_ty = ty_expr.ty.clone();
+
+            checker.unify(&tv, &inferred_ty, bind.ident.span.clone().into())?;
+
+            let ty = checker.apply(&tv);
 
             self.subst = checker.subst;
             self.count = checker.count;
 
-            let ty = if let Some(constraint_ty) = &bind.constraint {
-                self.unify(&ty, constraint_ty, bind.ident.span.clone().into())?;
-                constraint_ty.clone()
+            let ty = if let Some(constraint) = &bind.constraint {
+                self.unify(&ty, constraint, bind.ident.span.clone().into())?;
+                constraint.clone()
             } else {
                 ty
             };
 
             let scheme = self.generalize(&self.scope, &ty);
+
             self.scope.extend(bind.ident.name.clone(), scheme);
-            self.ty = Some(ty);
+
+            self.last_binding = Some(typed::Binding {
+                kind: match bind.kind {
+                    untyped::BindingKind::Normal => typed::BindingKind::Normal,
+                    untyped::BindingKind::Rec => typed::BindingKind::Rec,
+                },
+                ident: typed::Ident {
+                    name: bind.ident.name.clone(),
+                    span: bind.ident.span.clone(),
+                    ty: ty.clone(),
+                },
+                expr: Box::new(ty_expr),
+                span: bind.span.clone(),
+                ty,
+            });
+
             return Ok(());
         }
 
         checker.visit_expr(&bind.expr)?;
-        let inferred_ty = checker.ty.take().unwrap();
+
+        let ty_expr = checker.last_expr.take().unwrap();
+        let inferred_ty = ty_expr.ty.clone();
+
         self.subst = checker.subst;
         self.count = checker.count;
 
-        let ty = if let Some(constraint_ty) = &bind.constraint {
-            self.unify(&inferred_ty, constraint_ty, bind.ident.span.clone().into())?;
-            constraint_ty.clone()
+        let ty = if let Some(constraint) = &bind.constraint {
+            self.unify(&inferred_ty, constraint, bind.ident.span.clone().into())?;
+            constraint.clone()
         } else {
             inferred_ty
         };
 
         let scheme = self.generalize(&self.scope, &ty);
+
         self.scope.extend(bind.ident.name.clone(), scheme);
-        self.ty = Some(ty);
+
+        self.last_binding = Some(typed::Binding {
+            kind: match bind.kind {
+                untyped::BindingKind::Normal => typed::BindingKind::Normal,
+                untyped::BindingKind::Rec => typed::BindingKind::Rec,
+            },
+            ident: typed::Ident {
+                name: bind.ident.name.clone(),
+                span: bind.ident.span.clone(),
+                ty: ty.clone(),
+            },
+            expr: Box::new(ty_expr),
+            span: bind.span.clone(),
+            ty,
+        });
 
         Ok(())
     }
 
-    fn visit_num(&mut self, _num: &'ast Num) -> Result<(), Self::Err> {
-        self.ty = Some(Type::Number);
+    fn visit_num(&mut self, num: &'ast Num) -> Result<(), Self::Err> {
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::Number(typed::Num(
+                num.0,
+                num.1.clone(),
+                Type::Number,
+            ))),
+            span: num.1.clone(),
+            ty: Type::Number,
+        });
         Ok(())
     }
 
-    fn visit_str(&mut self, _str: &'ast Str) -> Result<(), Self::Err> {
-        self.ty = Some(Type::String);
+    fn visit_str(&mut self, s: &'ast Str) -> Result<(), Self::Err> {
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::String(typed::Str(
+                s.0.clone(),
+                s.1.clone(),
+                Type::String,
+            ))),
+            span: s.1.clone(),
+            ty: Type::String,
+        });
         Ok(())
     }
 
-    fn visit_bool(&mut self, _b: bool) -> Result<(), Self::Err> {
-        self.ty = Some(Type::Bool);
+    fn visit_bool(&mut self, b: bool) -> Result<(), Self::Err> {
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::Bool(b)),
+            span: 0..0,
+            ty: Type::Bool,
+        });
         Ok(())
     }
 
     fn visit_unary_op(&mut self, op: &'ast UnaryOp, expr: &'ast Expr) -> Result<(), Self::Err> {
         self.visit_expr(expr)?;
-        let ty = self.ty.take().unwrap();
+        let ty_expr = self.last_expr.take().unwrap();
+
         let inferred_ty = match op {
             UnaryOp::Neg => {
-                self.unify(&ty, &Type::Number, expr.span().into())?;
+                self.unify(
+                    &ty_expr.ty,
+                    &Type::Number,
+                    (ty_expr.span.start..expr.span().end).into(),
+                )?;
                 Ok(Type::Number)
             }
             UnaryOp::Not => {
-                self.unify(&ty, &Type::Bool, expr.span().into())?;
+                self.unify(
+                    &ty_expr.ty,
+                    &Type::Bool,
+                    (ty_expr.span.start..expr.span().end).into(),
+                )?;
                 Ok(Type::Bool)
             }
         }?;
-        self.ty = Some(inferred_ty);
+
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::Unary {
+                op: match op {
+                    untyped::UnaryOp::Neg => typed::UnaryOp::Neg,
+                    untyped::UnaryOp::Not => typed::UnaryOp::Not,
+                },
+                expr: ty_expr,
+            }),
+            span: expr.span(),
+            ty: inferred_ty,
+        });
         Ok(())
     }
 
@@ -391,25 +496,29 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         rhs: &'ast Expr,
     ) -> Result<(), Self::Err> {
         self.visit_expr(lhs)?;
-        let lhs_ty = self.ty.take().unwrap();
+        let ty_lhs = self.last_expr.take().unwrap();
         self.visit_expr(rhs)?;
-        let rhs_ty = self.ty.take().unwrap();
+        let ty_rhs = self.last_expr.take().unwrap();
 
+        let lhs_ty = ty_lhs.ty.clone();
+        let rhs_ty = ty_rhs.ty.clone();
+
+        let span: SourceSpan = (lhs.span().start..rhs.span().end).into();
         let inferred_ty = match op {
             BinaryOp::Add => {
                 if lhs_ty == Type::String || rhs_ty == Type::String {
-                    self.unify(&lhs_ty, &Type::String, lhs.span().into())?;
-                    self.unify(&rhs_ty, &Type::String, rhs.span().into())?;
+                    self.unify(&lhs_ty, &Type::String, span)?;
+                    self.unify(&rhs_ty, &Type::String, span)?;
                     Ok(Type::String)
                 } else {
-                    self.unify(&lhs_ty, &Type::Number, lhs.span().into())?;
-                    self.unify(&rhs_ty, &Type::Number, rhs.span().into())?;
+                    self.unify(&lhs_ty, &Type::Number, span)?;
+                    self.unify(&rhs_ty, &Type::Number, span)?;
                     Ok(Type::Number)
                 }
             }
             BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                self.unify(&lhs_ty, &Type::Number, lhs.span().into())?;
-                self.unify(&rhs_ty, &Type::Number, rhs.span().into())?;
+                self.unify(&lhs_ty, &Type::Number, span)?;
+                self.unify(&rhs_ty, &Type::Number, span)?;
                 Ok(Type::Number)
             }
             BinaryOp::Eq
@@ -418,20 +527,41 @@ impl<'ast> Visitor<'ast> for TypeChecker {
             | BinaryOp::Gt
             | BinaryOp::LtEq
             | BinaryOp::GtEq => {
-                self.unify(&lhs_ty, &rhs_ty, lhs.span().into())?;
+                self.unify(&lhs_ty, &rhs_ty, span)?;
                 Ok(Type::Bool)
             }
             BinaryOp::Dot => {
                 unreachable!();
             }
         }?;
-        self.ty = Some(inferred_ty);
+
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::Binary {
+                op: match op {
+                    untyped::BinaryOp::Add => typed::BinaryOp::Add,
+                    untyped::BinaryOp::Sub => typed::BinaryOp::Sub,
+                    untyped::BinaryOp::Mul => typed::BinaryOp::Mul,
+                    untyped::BinaryOp::Div => typed::BinaryOp::Div,
+                    untyped::BinaryOp::Eq => typed::BinaryOp::Eq,
+                    untyped::BinaryOp::NotEq => typed::BinaryOp::NotEq,
+                    untyped::BinaryOp::Lt => typed::BinaryOp::Lt,
+                    untyped::BinaryOp::Gt => typed::BinaryOp::Gt,
+                    untyped::BinaryOp::LtEq => typed::BinaryOp::LtEq,
+                    untyped::BinaryOp::GtEq => typed::BinaryOp::GtEq,
+                    untyped::BinaryOp::Dot => typed::BinaryOp::Dot,
+                },
+                lhs: ty_lhs,
+                rhs: ty_rhs,
+            }),
+            span: (lhs.span().start..rhs.span().end),
+            ty: inferred_ty,
+        });
         Ok(())
     }
 
     fn visit_struct_expr(
         &mut self,
-        type_name: &'ast TypeIdent,
+        type_name: &'ast untyped::TypeIdent,
         fields: &'ast [Binding],
     ) -> Result<(), Self::Err> {
         let struct_span: SourceSpan = type_name.span.clone().into();
@@ -449,7 +579,7 @@ impl<'ast> Visitor<'ast> for TypeChecker {
             .map(|f| (f.ident.name.clone(), f.ty.clone()))
             .collect();
 
-        let mut actual_fields = HashMap::new();
+        let mut ty_fields = Vec::with_capacity(fields.len());
 
         for bind in fields {
             let mut checker = TypeChecker::new(
@@ -458,16 +588,19 @@ impl<'ast> Visitor<'ast> for TypeChecker {
                 self.scope.clone(),
                 None,
                 self.struct_defs.clone(),
+                None,
+                None,
             );
             checker.visit_bind(bind)?;
             self.subst = checker.subst;
             self.count = checker.count;
 
-            let inf_ty = checker.ty.take().unwrap();
+            let ty_bind = checker.last_binding.take().unwrap();
+            let inf_ty = ty_bind.ty.clone();
 
             if let Some(expr_ty) = expr_fields.remove(&bind.ident.name) {
                 self.unify(&inf_ty, &expr_ty, bind.ident.span.clone().into())?;
-                actual_fields.insert(bind.ident.name.clone(), inf_ty);
+                ty_fields.push(ty_bind);
             } else {
                 return Err(Error::UndefinedIdent {
                     name: bind.ident.name.clone(),
@@ -484,11 +617,28 @@ impl<'ast> Visitor<'ast> for TypeChecker {
             });
         }
 
-        self.ty = Some(Type::Struct(type_name.clone()));
+        let struct_ty = Type::Struct(typed::TypeIdent {
+            name: type_name.name.clone(),
+            span: type_name.span.clone(),
+            ty: Box::new(self.new_var()),
+        });
+
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::Struct {
+                fields: ty_fields,
+                ty: struct_ty.clone(),
+            }),
+            span: (type_name.span.start
+                ..fields
+                    .last()
+                    .map_or(type_name.span.clone(), |b| b.span.clone())
+                    .end),
+            ty: struct_ty,
+        });
         Ok(())
     }
 
-    fn visit_struct_def(&mut self, struct_def: &'ast StructDef) -> Result<(), Self::Err> {
+    fn visit_struct_def(&mut self, struct_def: &'ast untyped::StructDef) -> Result<(), Self::Err> {
         let name = struct_def.name.name.clone();
         if self.struct_defs.contains_key(&name) {
             return Err(Error::DuplicateDef {
@@ -496,7 +646,41 @@ impl<'ast> Visitor<'ast> for TypeChecker {
                 span: struct_def.span.clone().into(),
             });
         }
-        self.struct_defs.insert(name, struct_def.clone());
+
+        let ty_type_ident = typed::TypeIdent {
+            name: struct_def.name.name.clone(),
+            span: struct_def.name.span.clone(),
+            ty: Box::new(self.new_var()),
+        };
+
+        let mut ty_fields = Vec::new();
+        for field in &struct_def.fields {
+            let field_tv = self.new_var();
+            self.unify(&field_tv, &field.ty, field.span.clone().into())?;
+
+            let ty_ident = typed::Ident {
+                name: field.ident.name.clone(),
+                span: field.ident.span.clone(),
+                ty: field_tv.clone(),
+            };
+            ty_fields.push(typed::StructField {
+                ident: ty_ident,
+                ty: field_tv,
+                span: field.span.clone(),
+            });
+        }
+
+        let tv = self.new_var();
+        let new_ty_struct_def = typed::StructDef {
+            name: ty_type_ident,
+            fields: ty_fields,
+            span: struct_def.span.clone(),
+            ty: tv,
+        };
+
+        self.struct_defs
+            .insert(name.clone(), new_ty_struct_def.clone());
+
         Ok(())
     }
 
@@ -506,6 +690,8 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         expr: &'ast Expr,
     ) -> Result<(), Self::Err> {
         let mut scope = self.scope.clone();
+        let mut ty_bindings = Vec::with_capacity(bindings.len());
+
         for bind in bindings {
             let mut checker = TypeChecker::new(
                 self.subst.clone(),
@@ -513,11 +699,14 @@ impl<'ast> Visitor<'ast> for TypeChecker {
                 scope.clone(),
                 None,
                 self.struct_defs.clone(),
+                None,
+                None,
             );
             checker.visit_bind(bind)?;
             self.subst = checker.subst;
             self.count = checker.count;
             scope = checker.scope;
+            ty_bindings.push(checker.last_binding.take().unwrap());
         }
 
         let mut checker = TypeChecker::new(
@@ -526,82 +715,142 @@ impl<'ast> Visitor<'ast> for TypeChecker {
             scope.clone(),
             None,
             self.struct_defs.clone(),
+            None,
+            None,
         );
 
         checker.visit_expr(expr)?;
-        let ty = checker.ty.take().unwrap();
+        let ty_expr = checker.last_expr.take().unwrap();
+        let expr_ty = ty_expr.ty.clone();
         self.subst = checker.subst;
         self.count = checker.count;
-        self.ty = Some(ty);
+        self.scope = checker.scope;
+
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::Block {
+                bindings: ty_bindings,
+                expr: ty_expr,
+            }),
+            span: bindings
+                .first()
+                .map_or(expr.span(), |b| b.span.clone())
+                .start..expr.span().end,
+            ty: expr_ty,
+        });
         Ok(())
     }
 
     fn visit_app(&mut self, lhs: &'ast Expr, rhs: &'ast Expr) -> Result<(), Self::Err> {
         self.visit_expr(lhs)?;
-        let func_type = self.ty.take().unwrap();
+        let ty_lhs = self.last_expr.take().unwrap();
         self.visit_expr(rhs)?;
-        let arg_type = self.ty.take().unwrap();
+        let ty_rhs = self.last_expr.take().unwrap();
 
-        let ret_type = self.new_var();
-        let expected_func_type = Type::Lambda(Box::new(arg_type), Box::new(ret_type.clone()));
+        let func_ty = ty_lhs.ty.clone();
+        let arg_ty = ty_rhs.ty.clone();
 
-        self.unify(&func_type, &expected_func_type, lhs.span().into())?;
-        self.ty = Some(ret_type);
+        let tv = self.new_var();
+        let expected_func_ty = Type::Lambda(Box::new(arg_ty), Box::new(tv.clone()));
+
+        self.unify(&func_ty, &expected_func_ty, lhs.span().into())?;
+        let inferred_ty = self.apply(&tv);
+
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::App {
+                lhs: ty_lhs,
+                rhs: ty_rhs,
+            }),
+            span: (lhs.span().start..rhs.span().end),
+            ty: inferred_ty,
+        });
         Ok(())
     }
 
     fn visit_lambda(&mut self, params: &'ast [Param], body: &'ast Expr) -> Result<(), Self::Err> {
         let mut scope = self.scope.clone();
-        let mut param_types = Vec::new();
+        let mut ty_params = Vec::new();
+        let mut param_tys = Vec::new();
 
         for param in params {
-            let param_type = self.new_var();
-            if let Some(constraint_ty) = &param.constraint {
-                self.unify(&param_type, constraint_ty, param.ident.span.clone().into())?;
+            let tv = self.new_var();
+            if let Some(constraint) = &param.constraint {
+                self.unify(&tv, constraint, param.ident.span.clone().into())?;
             }
 
             scope.extend(
                 param.ident.name.clone(),
                 Scheme {
                     vars: vec![],
-                    ty: param_type.clone(),
+                    ty: tv.clone(),
                 },
             );
-            param_types.push(param_type);
+            param_tys.push(tv.clone());
+            ty_params.push(typed::Param {
+                ident: typed::Ident {
+                    name: param.ident.name.clone(),
+                    span: param.ident.span.clone(),
+                    ty: tv.clone(),
+                },
+                ty: tv,
+                span: param.span.clone(),
+            });
         }
 
         let mut typer = TypeChecker {
             subst: self.subst.clone(),
             count: self.count,
             scope,
-            ty: None,
+            program: None,
             struct_defs: self.struct_defs.clone(),
+            last_expr: None,
+            last_binding: None,
         };
 
         typer.visit_expr(body)?;
-        let body_type = typer.ty.take().unwrap();
+        let ty_body = typer.last_expr.take().unwrap();
+        let body_ty = ty_body.ty.clone();
+
         self.subst = typer.subst;
         self.count = typer.count;
 
-        let mut lam_type = body_type;
-        for param_type in param_types.iter().rev() {
-            lam_type = Type::Lambda(Box::new(param_type.clone()), Box::new(lam_type));
+        let mut lambda_ty = body_ty;
+        for param_ty in param_tys.iter().rev() {
+            lambda_ty = Type::Lambda(Box::new(self.apply(param_ty)), Box::new(lambda_ty));
         }
 
-        self.ty = Some(lam_type);
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::Lambda {
+                params: ty_params,
+                body: ty_body,
+            }),
+            span: params.first().map_or(body.span(), |p| p.span.clone()).start..body.span().end,
+            ty: lambda_ty,
+        });
         Ok(())
     }
 
     fn visit_list(&mut self, list: &'ast List) -> Result<(), Self::Err> {
-        let elem_type = self.new_var();
+        let tv = self.new_var();
+        let mut ty_exprs = Vec::with_capacity(list.exprs.len());
 
         for expr in &list.exprs {
             self.visit_expr(expr)?;
-            let ty = self.ty.take().unwrap();
-            self.unify(&elem_type, &ty, expr.span().into())?;
+            let ty_expr = self.last_expr.take().unwrap();
+            self.unify(&tv, &ty_expr.ty, expr.span().into())?;
+            ty_exprs.push(ty_expr);
         }
 
-        self.ty = Some(Type::List(Box::new(elem_type)));
+        let inferred_ty = Type::List(Box::new(self.apply(&tv)));
+
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::List(typed::List {
+                exprs: ty_exprs,
+                span: list.span.clone(),
+                ty: inferred_ty.clone(),
+            })),
+            span: list.span.clone(),
+            ty: inferred_ty,
+        });
         Ok(())
     }
 
@@ -611,17 +860,18 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         ident: &'ast Ident,
     ) -> Result<(), Self::Err> {
         self.visit_expr(expr)?;
-        let ty = self.ty.take().unwrap();
+        let ty_expr = self.last_expr.take().unwrap();
+        let expr_ty = ty_expr.ty.clone();
 
-        let inferred_field_ty = if let Type::Struct(struct_type_ident) = self.apply(&ty) {
-            let struct_def_span: SourceSpan = struct_type_ident.span.clone().into();
-            let struct_def = self
-                .struct_defs
-                .get(&struct_type_ident.name)
-                .ok_or_else(|| Error::UnknownType {
-                    name: struct_type_ident.name.clone(),
-                    span: struct_def_span,
-                })?;
+        let inferred_ty = if let Type::Struct(struct_ty_ident) = self.apply(&expr_ty) {
+            let struct_def_span: SourceSpan = struct_ty_ident.span.clone().into();
+            let struct_def =
+                self.struct_defs
+                    .get(&struct_ty_ident.name)
+                    .ok_or_else(|| Error::UnknownType {
+                        name: struct_ty_ident.name.clone(),
+                        span: struct_def_span,
+                    })?;
             struct_def
                 .fields
                 .iter()
@@ -633,13 +883,25 @@ impl<'ast> Visitor<'ast> for TypeChecker {
                 })?
         } else {
             return Err(Error::UnexpectedType {
-                t1: format!("Expected struct type, found {}", ty),
+                t1: format!("Expected struct type, found {}", expr_ty),
                 t2: "Struct".to_string(),
                 span: expr.span().into(),
             });
         };
+        let inferred_field_ty = inferred_ty;
 
-        self.ty = Some(inferred_field_ty);
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::StructAccess {
+                expr: ty_expr,
+                ident: typed::Ident {
+                    name: ident.name.clone(),
+                    span: ident.span.clone(),
+                    ty: inferred_field_ty.clone(),
+                },
+            }),
+            span: (expr.span().start..ident.span.end),
+            ty: inferred_field_ty,
+        });
         Ok(())
     }
 
@@ -650,21 +912,30 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         else_expr: &'ast Expr,
     ) -> Result<(), Self::Err> {
         self.visit_expr(cond)?;
-        let cond_type = self.ty.take().unwrap();
-        self.unify(&cond_type, &Type::Bool, cond.span().into())?;
+        let ty_cond = self.last_expr.take().unwrap();
+        self.unify(&ty_cond.ty, &Type::Bool, cond.span().into())?;
 
         self.visit_expr(then_expr)?;
-        let then_type = self.ty.take().unwrap();
+        let ty_then = self.last_expr.take().unwrap();
         self.visit_expr(else_expr)?;
-        let else_type = self.ty.take().unwrap();
-        self.unify(&then_type, &else_type, then_expr.span().into())?;
+        let ty_else = self.last_expr.take().unwrap();
+        self.unify(&ty_then.ty, &ty_else.ty, then_expr.span().into())?;
 
-        self.ty = Some(then_type);
+        let inferred_ty = ty_then.ty.clone();
+
+        self.last_expr = Some(typed::Expr {
+            kind: Box::new(typed::ExprKind::IfExpr {
+                cond: ty_cond,
+                then_expr: ty_then,
+                else_expr: ty_else,
+            }),
+            span: (cond.span().start..else_expr.span().end),
+            ty: inferred_ty,
+        });
         Ok(())
     }
 
-    fn visit_type(&mut self, ty: &'ast Type) -> Result<(), Self::Err> {
-        self.ty = Some(ty.clone());
+    fn visit_type(&mut self, _ty: &'ast Type) -> Result<(), Self::Err> {
         Ok(())
     }
 }

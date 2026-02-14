@@ -1,4 +1,4 @@
-use crate::ast::{self, BinaryOp, Expr, Ident, List, Num, Param, Str, UnaryOp};
+use crate::ast::untyped::{self, BinaryOp, Expr, Ident, List, Num, Param, Str, UnaryOp};
 use crate::lexer::{Token, TokenIter, TokenKind};
 use crate::types::Type;
 use logos::Span;
@@ -106,14 +106,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(&mut self) -> Result<ast::Program, Error> {
+    pub fn parse(&mut self) -> Result<untyped::Program, Error> {
         let mut structs = Vec::new();
         while self.check(&TokenKind::Struct) {
             structs.push(self.struct_def()?);
         }
         let expr = self.block(true)?;
         self.expect_eof()?;
-        Ok(ast::Program { structs, expr })
+        Ok(untyped::Program { structs, expr })
     }
 
     #[inline]
@@ -250,7 +250,7 @@ impl<'a> Parser<'a> {
         let span = token.span.clone();
         let name = &self.source[span.start..span.end];
 
-        Ok(Expr::Ident(ast::Ident {
+        Ok(Expr::Ident(untyped::Ident {
             name: name.to_string(),
             span,
         }))
@@ -265,9 +265,10 @@ impl<'a> Parser<'a> {
             "Number" => Type::Number,
             "String" => Type::String,
             "Bool" => Type::Bool,
-            _ => Type::Struct(ast::TypeIdent {
+            _ => Type::Struct(crate::ast::typed::TypeIdent {
                 name: name.to_string(),
                 span,
+                ty: Box::new(Type::Var(0)),
             }),
         })
     }
@@ -404,9 +405,9 @@ impl<'a> Parser<'a> {
                         span: rec.span.into(),
                     });
                 };
-                ast::BindingKind::Rec
+                untyped::BindingKind::Rec
             } else {
-                ast::BindingKind::Normal
+                untyped::BindingKind::Normal
             };
 
             let key = self.key()?;
@@ -420,7 +421,7 @@ impl<'a> Parser<'a> {
 
             let span = key.span.start..(self.expect(TokenKind::Semicolon)?.span.end);
 
-            bindings.push(ast::Binding {
+            bindings.push(untyped::Binding {
                 kind,
                 ident: key,
                 constraint,
@@ -443,7 +444,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn struct_expr(&mut self, type_name: ast::TypeIdent) -> Result<Expr, Error> {
+    fn struct_expr(&mut self, type_name: untyped::TypeIdent) -> Result<Expr, Error> {
         let start = self.expect(TokenKind::BraceL)?.span.start;
         let mut fields = Vec::new();
 
@@ -457,8 +458,8 @@ impl<'a> Parser<'a> {
                 Expr::Ident(key.clone())
             };
 
-            fields.push(ast::Binding {
-                kind: ast::BindingKind::Normal,
+            fields.push(untyped::Binding {
+                kind: untyped::BindingKind::Normal,
                 span: key.span.start..expr.span().end,
                 constraint,
                 ident: key,
@@ -542,7 +543,7 @@ impl<'a> Parser<'a> {
     fn atom(&mut self) -> Result<Expr, Error> {
         if self.check(&TokenKind::TypeIdent) && self.check_next(&TokenKind::BraceL) {
             let type_ident_token = self.expect(TokenKind::TypeIdent)?;
-            let type_name = ast::TypeIdent {
+            let type_name = untyped::TypeIdent {
                 name: self.source[type_ident_token.span.start..type_ident_token.span.end]
                     .to_string(),
                 span: type_ident_token.span,
@@ -665,10 +666,10 @@ impl<'a> Parser<'a> {
         self.atom()
     }
 
-    fn struct_def(&mut self) -> Result<ast::StructDef, Error> {
+    fn struct_def(&mut self) -> Result<untyped::StructDef, Error> {
         let start_span = self.expect(TokenKind::Struct)?.span;
         let name_token = self.expect(TokenKind::TypeIdent)?;
-        let name_ident = ast::TypeIdent {
+        let name_ident = untyped::TypeIdent {
             name: self.source[name_token.span.start..name_token.span.end].to_string(),
             span: name_token.span,
         };
@@ -688,18 +689,18 @@ impl<'a> Parser<'a> {
         }
         let end_span = self.expect(TokenKind::BraceR)?.span;
 
-        Ok(ast::StructDef {
+        Ok(untyped::StructDef {
             name: name_ident,
             fields,
             span: start_span.start..end_span.end,
         })
     }
 
-    fn struct_field(&mut self) -> Result<ast::StructField, Error> {
+    fn struct_field(&mut self) -> Result<untyped::StructField, Error> {
         let ident = self.key()?;
         self.expect(TokenKind::Colon)?;
         let ty = self.type_expr()?;
         let span = ident.span.clone();
-        Ok(ast::StructField { ident, ty, span })
+        Ok(untyped::StructField { ident, ty, span })
     }
 }

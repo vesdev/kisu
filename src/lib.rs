@@ -1,13 +1,5 @@
 use logos::Lexer;
 
-use crate::{
-    ast::Visitor,
-    lexer::TokenIter,
-    parser::Parser,
-    target::eval::{self, TreeWalker, Value},
-    types::TypeChecker,
-};
-
 pub mod ast;
 pub mod lexer;
 pub mod parser;
@@ -19,6 +11,8 @@ pub mod types;
 #[cfg(feature = "serde")]
 pub use serialize::de::from_str;
 
+use crate::target::eval::{self, Value};
+
 /// run kisu program with pretty printed errors
 pub fn run(source: &str) -> Result<Value, miette::Error> {
     let source = String::from(source);
@@ -27,14 +21,30 @@ pub fn run(source: &str) -> Result<Value, miette::Error> {
 
 /// run kisu program with internal error type
 pub fn eval(source: &str) -> Result<Value, Error> {
-    let lexer = Lexer::new(source);
-    let mut parser = Parser::new(TokenIter::from(lexer), source);
-    let program = parser.parse()?;
-    let mut checker = TypeChecker::default();
-    checker.check(&program)?;
-    let mut walker = TreeWalker::default();
-    walker.visit_program(&program)?;
-    Ok(walker.consume()?)
+    let ast = {
+        use crate::{lexer::TokenIter, parser::Parser};
+        let lexer = Lexer::new(source);
+        let mut parser = Parser::new(TokenIter::from(lexer), source);
+        parser.parse()?
+    };
+
+    let typed_ast = {
+        use crate::ast::untyped::Visitor;
+        use crate::types::TypeChecker;
+        let mut checker = TypeChecker::default();
+        checker.visit_program(&ast)?;
+        checker.consume()?
+    };
+
+    let result = {
+        use crate::ast::typed::Visitor;
+        use crate::target::eval::TreeWalker;
+        let mut walker = TreeWalker::default();
+        walker.visit_program(&typed_ast)?;
+        walker.consume()?
+    };
+
+    Ok(result)
 }
 
 #[derive(thiserror::Error, miette::Diagnostic, Debug)]
