@@ -9,6 +9,7 @@ repository = "https://github.com/kisu-is/kisu"
 
 
 [dependencies]
+bumpalo = { version = "3.19.1", features = ["collections", "boxed"] }
 logos = "0.16.0"
 miette = { version = "7.6.0", features = ["fancy"] }
 rpds = "1.2.0"

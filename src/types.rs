@@ -282,9 +282,9 @@ impl TypeChecker {
 impl<'ast> Visitor<'ast> for TypeChecker {
     type Err = Error;
 
-    fn visit_program(&mut self, program: &'ast Program) -> Result<(), Self::Err> {
+    fn visit_program(&mut self, program: &'ast Program<'ast>) -> Result<(), Self::Err> {
         let mut structs = Vec::new();
-        for s in &program.structs {
+        for s in program.structs.iter() {
             self.visit_struct_def(s)?;
             let name = s.name.name.clone();
             structs.push(self.struct_defs.get(&name).unwrap().clone());
@@ -321,7 +321,7 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         }
     }
 
-    fn visit_bind(&mut self, bind: &'ast untyped::Binding) -> Result<(), Self::Err> {
+    fn visit_bind(&mut self, bind: &'ast untyped::Binding<'ast>) -> Result<(), Self::Err> {
         let mut checker = TypeChecker::new(
             self.subst.clone(),
             self.count,
@@ -339,7 +339,7 @@ impl<'ast> Visitor<'ast> for TypeChecker {
                 ty: tv.clone(),
             };
             checker.scope.extend(bind.ident.name.clone(), scheme);
-            checker.visit_expr(&bind.expr)?;
+            checker.visit_expr(bind.expr)?;
 
             let ty_expr = checker.last_expr.take().unwrap();
             let inferred_ty = ty_expr.ty.clone();
@@ -380,7 +380,7 @@ impl<'ast> Visitor<'ast> for TypeChecker {
             return Ok(());
         }
 
-        checker.visit_expr(&bind.expr)?;
+        checker.visit_expr(bind.expr)?;
 
         let ty_expr = checker.last_expr.take().unwrap();
         let inferred_ty = ty_expr.ty.clone();
@@ -452,7 +452,11 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         Ok(())
     }
 
-    fn visit_unary_op(&mut self, op: &'ast UnaryOp, expr: &'ast Expr) -> Result<(), Self::Err> {
+    fn visit_unary_op(
+        &mut self,
+        op: &'ast UnaryOp,
+        expr: &'ast Expr<'ast>,
+    ) -> Result<(), Self::Err> {
         self.visit_expr(expr)?;
         let ty_expr = self.last_expr.take().unwrap();
 
@@ -492,8 +496,8 @@ impl<'ast> Visitor<'ast> for TypeChecker {
     fn visit_binary_op(
         &mut self,
         op: &'ast BinaryOp,
-        lhs: &'ast Expr,
-        rhs: &'ast Expr,
+        lhs: &'ast Expr<'ast>,
+        rhs: &'ast Expr<'ast>,
     ) -> Result<(), Self::Err> {
         self.visit_expr(lhs)?;
         let ty_lhs = self.last_expr.take().unwrap();
@@ -562,7 +566,7 @@ impl<'ast> Visitor<'ast> for TypeChecker {
     fn visit_struct_expr(
         &mut self,
         type_name: &'ast untyped::TypeIdent,
-        fields: &'ast [Binding],
+        fields: &'ast [Binding<'ast>],
     ) -> Result<(), Self::Err> {
         let struct_span: SourceSpan = type_name.span.clone().into();
         let struct_def =
@@ -638,7 +642,10 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         Ok(())
     }
 
-    fn visit_struct_def(&mut self, struct_def: &'ast untyped::StructDef) -> Result<(), Self::Err> {
+    fn visit_struct_def(
+        &mut self,
+        struct_def: &'ast untyped::StructDef<'ast>,
+    ) -> Result<(), Self::Err> {
         let name = struct_def.name.name.clone();
         if self.struct_defs.contains_key(&name) {
             return Err(Error::DuplicateDef {
@@ -654,7 +661,7 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         };
 
         let mut ty_fields = Vec::new();
-        for field in &struct_def.fields {
+        for field in struct_def.fields.iter() {
             let field_tv = self.new_var();
             self.unify(&field_tv, &field.ty, field.span.clone().into())?;
 
@@ -686,8 +693,8 @@ impl<'ast> Visitor<'ast> for TypeChecker {
 
     fn visit_block_expr(
         &mut self,
-        bindings: &'ast [Binding],
-        expr: &'ast Expr,
+        bindings: &'ast [Binding<'ast>],
+        expr: &'ast Expr<'ast>,
     ) -> Result<(), Self::Err> {
         let mut scope = self.scope.clone();
         let mut ty_bindings = Vec::with_capacity(bindings.len());
@@ -740,7 +747,7 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         Ok(())
     }
 
-    fn visit_app(&mut self, lhs: &'ast Expr, rhs: &'ast Expr) -> Result<(), Self::Err> {
+    fn visit_app(&mut self, lhs: &'ast Expr<'ast>, rhs: &'ast Expr<'ast>) -> Result<(), Self::Err> {
         self.visit_expr(lhs)?;
         let ty_lhs = self.last_expr.take().unwrap();
         self.visit_expr(rhs)?;
@@ -766,7 +773,11 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         Ok(())
     }
 
-    fn visit_lambda(&mut self, params: &'ast [Param], body: &'ast Expr) -> Result<(), Self::Err> {
+    fn visit_lambda(
+        &mut self,
+        params: &'ast [Param<'ast>],
+        body: &'ast Expr<'ast>,
+    ) -> Result<(), Self::Err> {
         let mut scope = self.scope.clone();
         let mut ty_params = Vec::new();
         let mut param_tys = Vec::new();
@@ -829,11 +840,11 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         Ok(())
     }
 
-    fn visit_list(&mut self, list: &'ast List) -> Result<(), Self::Err> {
+    fn visit_list(&mut self, list: &'ast List<'ast>) -> Result<(), Self::Err> {
         let tv = self.new_var();
         let mut ty_exprs = Vec::with_capacity(list.exprs.len());
 
-        for expr in &list.exprs {
+        for expr in list.exprs.iter() {
             self.visit_expr(expr)?;
             let ty_expr = self.last_expr.take().unwrap();
             self.unify(&tv, &ty_expr.ty, expr.span().into())?;
@@ -856,7 +867,7 @@ impl<'ast> Visitor<'ast> for TypeChecker {
 
     fn visit_struct_access(
         &mut self,
-        expr: &'ast Expr,
+        expr: &'ast Expr<'ast>,
         ident: &'ast Ident,
     ) -> Result<(), Self::Err> {
         self.visit_expr(expr)?;
@@ -907,9 +918,9 @@ impl<'ast> Visitor<'ast> for TypeChecker {
 
     fn visit_if_expr(
         &mut self,
-        cond: &'ast Expr,
-        then_expr: &'ast Expr,
-        else_expr: &'ast Expr,
+        cond: &'ast Expr<'ast>,
+        then_expr: &'ast Expr<'ast>,
+        else_expr: &'ast Expr<'ast>,
     ) -> Result<(), Self::Err> {
         self.visit_expr(cond)?;
         let ty_cond = self.last_expr.take().unwrap();

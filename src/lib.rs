@@ -1,3 +1,4 @@
+use bumpalo::Bump;
 use logos::Lexer;
 
 pub mod ast;
@@ -21,10 +22,12 @@ pub fn run(source: &str) -> Result<Value, miette::Error> {
 
 /// run kisu program with internal error type
 pub fn eval(source: &str) -> Result<Value, Error> {
+    let bump = Bump::new();
+
     let ast = {
         use crate::{lexer::TokenIter, parser::Parser};
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(TokenIter::from(lexer), source);
+        let mut parser = Parser::new(TokenIter::from(lexer), source, &bump);
         parser.parse()?
     };
 

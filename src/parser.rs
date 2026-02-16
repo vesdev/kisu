@@ -1,6 +1,8 @@
-use crate::ast::untyped::{self, BinaryOp, Expr, Ident, List, Num, Param, Str, UnaryOp};
+use crate::ast::untyped::{self, BinaryOp, Binding, Expr, Ident, List, Num, Param, Str, UnaryOp};
 use crate::lexer::{Token, TokenIter, TokenKind};
 use crate::types::Type;
+use bumpalo::Bump;
+use bumpalo::collections::Vec;
 use logos::Span;
 use std::collections::VecDeque;
 
@@ -67,19 +69,20 @@ mod _hide_warnings {
 }
 
 #[derive(Clone)]
-pub struct Parser<'a> {
-    source: &'a str,
-    lexer: TokenIter<'a>,
+pub struct Parser<'src, 'ast> {
+    source: &'src str,
+    lexer: TokenIter<'src>,
     buffer: VecDeque<Token>,
+    bump: &'ast Bump,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(lexer: TokenIter<'a>, source: &'a str) -> Self {
+impl<'src, 'ast> Parser<'src, 'ast> {
+    pub fn new(lexer: TokenIter<'src>, source: &'src str, bump: &'ast Bump) -> Self {
         let mut parser = Self {
             source,
             lexer,
-            // lookahead
             buffer: VecDeque::with_capacity(3),
+            bump,
         };
         parser.fill_buffer();
         parser
@@ -106,14 +109,17 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(&mut self) -> Result<untyped::Program, Error> {
-        let mut structs = Vec::new();
+    pub fn parse(&mut self) -> Result<untyped::Program<'ast>, Error> {
+        let mut structs = Vec::new_in(self.bump);
         while self.check(&TokenKind::Struct) {
             structs.push(self.struct_def()?);
         }
         let expr = self.block(true)?;
         self.expect_eof()?;
-        Ok(untyped::Program { structs, expr })
+        Ok(untyped::Program {
+            structs,
+            expr: expr.clone(),
+        })
     }
 
     #[inline]
@@ -225,35 +231,42 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn number(&mut self) -> Result<Expr, Error> {
+    fn number(&mut self) -> Result<&'ast Expr<'ast>, Error> {
         let token = self.expect(TokenKind::Number)?;
         let span = token.span.clone();
         let lexeme = &self.source[span.start..span.end];
         let value = lexeme.parse::<f64>().map_err(|_| Error::InvalidNumber {
             span: span.clone().into(),
         })?;
-        Ok(Expr::Number(Num(value, span)))
+        Ok(self.bump.alloc(Expr::Number(Num(value, span))))
     }
 
-    fn string(&mut self) -> Result<Expr, Error> {
+    fn string(&mut self) -> Result<&'ast Expr<'ast>, Error> {
         let token = self.expect(TokenKind::String)?;
         let span = token.span.clone();
         let lexeme = &self.source[span.start..span.end];
 
         // remove quotes
         let content = &lexeme[1..lexeme.len() - 1];
-        Ok(Expr::String(Str(content.into(), span)))
+        Ok(self
+            .bump
+            .alloc(Expr::String(Str(content.to_string(), span))))
     }
 
-    fn ident(&mut self) -> Result<Expr, Error> {
+    fn ident(&mut self) -> Result<Ident, Error> {
         let token = self.expect(TokenKind::Ident)?;
         let span = token.span.clone();
         let name = &self.source[span.start..span.end];
 
-        Ok(Expr::Ident(untyped::Ident {
+        Ok(untyped::Ident {
             name: name.to_string(),
             span,
-        }))
+        })
+    }
+
+    fn ident_expr(&mut self) -> Result<&'ast Expr<'ast>, Error> {
+        let ident = self.ident()?;
+        Ok(self.bump.alloc(Expr::Ident(ident)))
     }
 
     fn type_ident(&mut self) -> Result<Type, Error> {
@@ -338,29 +351,29 @@ impl<'a> Parser<'a> {
         self.check(&TokenKind::Ident) || self.check(&TokenKind::String)
     }
 
-    fn if_expr(&mut self) -> Result<Expr, Error> {
+    fn if_expr(&mut self) -> Result<&'ast Expr<'ast>, Error> {
         let if_token = self.expect(TokenKind::If)?;
-        let cond = Box::new(self.expr()?);
+        let cond = self.expr()?;
         self.expect(TokenKind::Then)?;
-        let then_expr = Box::new(self.expr()?);
+        let then_expr = self.expr()?;
         let else_token = self.expect(TokenKind::Else)?;
-        let else_expr = Box::new(self.expr()?);
+        let else_expr = self.expr()?;
 
-        Ok(Expr::IfExpr {
+        Ok(self.bump.alloc(Expr::IfExpr {
             cond,
             then_expr,
             else_expr,
             span: if_token.span.start..else_token.span.end,
-        })
+        }))
     }
 
     fn key(&mut self) -> Result<Ident, Error> {
-        if let Ok(Expr::Ident(ident)) = self.ident() {
+        if let Ok(ident) = self.ident() {
             Ok(ident)
         } else if let Ok(Expr::String(str)) = self.string() {
             Ok(Ident {
-                name: str.0,
-                span: str.1,
+                name: str.0.clone(),
+                span: str.1.clone(),
             })
         } else {
             Err(Error::ExpectedIdentifier {
@@ -378,14 +391,15 @@ impl<'a> Parser<'a> {
         Ok(Some(self.type_expr()?))
     }
 
-    fn block(&mut self, top_level: bool) -> Result<Expr, Error> {
+    fn block(&mut self, top_level: bool) -> Result<&'ast Expr<'ast>, Error> {
         let mut start = self.current().span.start;
 
         if !top_level {
             start = self.expect(TokenKind::ParenL)?.span.end;
         }
+        use bumpalo::collections::Vec;
 
-        let mut bindings = Vec::new();
+        let mut bindings = Vec::new_in(self.bump);
 
         while {
             let is_normal = self.check_key()
@@ -416,16 +430,16 @@ impl<'a> Parser<'a> {
             let expr = if self.check_consume(&TokenKind::Assign).is_some() {
                 self.expr()?
             } else {
-                Expr::Ident(key.clone())
+                self.bump.alloc(Expr::Ident(key.clone()))
             };
 
             let span = key.span.start..(self.expect(TokenKind::Semicolon)?.span.end);
 
-            bindings.push(untyped::Binding {
+            bindings.push(Binding {
                 kind,
                 ident: key,
                 constraint,
-                expr: Box::new(expr),
+                expr,
                 span,
             });
         }
@@ -437,16 +451,16 @@ impl<'a> Parser<'a> {
             end = self.expect(TokenKind::ParenR)?.span.end;
         }
 
-        Ok(Expr::Block {
+        Ok(self.bump.alloc(Expr::Block {
             bindings,
-            expr: Box::new(expr_result),
+            expr: expr_result,
             span: start..end,
-        })
+        }))
     }
 
-    fn struct_expr(&mut self, type_name: untyped::TypeIdent) -> Result<Expr, Error> {
+    fn struct_expr(&mut self, type_name: untyped::TypeIdent) -> Result<&'ast Expr<'ast>, Error> {
         let start = self.expect(TokenKind::BraceL)?.span.start;
-        let mut fields = Vec::new();
+        let mut fields = Vec::new_in(self.bump);
 
         while !self.check(&TokenKind::BraceR) {
             let key = self.key()?;
@@ -455,7 +469,7 @@ impl<'a> Parser<'a> {
             let expr = if self.check_consume(&TokenKind::Assign).is_some() {
                 self.expr()?
             } else {
-                Expr::Ident(key.clone())
+                self.bump.alloc(Expr::Ident(key.clone()))
             };
 
             fields.push(untyped::Binding {
@@ -463,7 +477,7 @@ impl<'a> Parser<'a> {
                 span: key.span.start..expr.span().end,
                 constraint,
                 ident: key,
-                expr: Box::new(expr),
+                expr,
             });
 
             if self.check_consume(&TokenKind::Semicolon).is_none()
@@ -479,17 +493,17 @@ impl<'a> Parser<'a> {
 
         let end = self.expect(TokenKind::BraceR)?.span.end;
 
-        Ok(Expr::Struct {
+        Ok(self.bump.alloc(Expr::Struct {
             type_name,
             fields,
             span: start..end,
-        })
+        }))
     }
 
-    fn lambda(&mut self) -> Result<Expr, Error> {
+    fn lambda(&mut self) -> Result<&'ast Expr<'ast>, Error> {
         let start = self.expect(TokenKind::Pipe)?.span.start;
 
-        let mut params = Vec::new();
+        let mut params = Vec::new_in(self.bump);
         if !self.check(&TokenKind::Pipe) {
             loop {
                 let key = self.key()?;
@@ -510,21 +524,20 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::Pipe)?;
         self.expect(TokenKind::Colon)?;
-        let body = Box::new(self.expr()?);
-
+        let body = self.expr()?;
         let span = start..body.span().end;
 
-        Ok(Expr::Lambda { params, body, span })
+        Ok(self.bump.alloc(Expr::Lambda { params, body, span }))
     }
 
-    fn list(&mut self) -> Result<Expr, Error> {
+    fn list(&mut self) -> Result<&'ast Expr<'ast>, Error> {
         let start = self.expect(TokenKind::BracketL)?.span.start;
 
-        let mut exprs = Vec::new();
+        let mut exprs = Vec::new_in(self.bump);
 
         while !self.check(&TokenKind::BracketR) {
             let expr = self.expr()?;
-            exprs.push(expr);
+            exprs.push(expr.clone());
             if self.check_consume(&TokenKind::Comma).is_none() && !self.check(&TokenKind::BracketR)
             {
                 return Err(Error::UnexpectedToken {
@@ -537,10 +550,10 @@ impl<'a> Parser<'a> {
 
         let span = start..self.expect(TokenKind::BracketR)?.span.end;
 
-        Ok(Expr::List(List { exprs, span }))
+        Ok(self.bump.alloc(Expr::List(List { exprs, span })))
     }
 
-    fn atom(&mut self) -> Result<Expr, Error> {
+    fn atom(&mut self) -> Result<&'ast Expr<'ast>, Error> {
         if self.check(&TokenKind::TypeIdent) && self.check_next(&TokenKind::BraceL) {
             let type_ident_token = self.expect(TokenKind::TypeIdent)?;
             let type_name = untyped::TypeIdent {
@@ -556,13 +569,15 @@ impl<'a> Parser<'a> {
             TokenKind::String => self.string(),
             TokenKind::True => {
                 self.consume();
-                Ok(Expr::Bool(true))
+                let expr: &'ast Expr<'ast> = self.bump.alloc(Expr::Bool(true));
+                Ok(expr)
             }
             TokenKind::False => {
                 self.consume();
-                Ok(Expr::Bool(false))
+                let expr: &'ast Expr<'ast> = self.bump.alloc(Expr::Bool(false));
+                Ok(expr)
             }
-            TokenKind::Ident => self.ident(),
+            TokenKind::Ident => self.ident_expr(),
             TokenKind::BracketL => self.list(),
             TokenKind::ParenL => self.block(false),
             TokenKind::Pipe => self.lambda(),
@@ -590,7 +605,7 @@ impl<'a> Parser<'a> {
         ) || (self.check(&TokenKind::TypeIdent) && self.check_next(&TokenKind::BraceL))
     }
 
-    pub fn expr(&mut self) -> Result<Expr, Error> {
+    pub fn expr(&mut self) -> Result<&'ast Expr<'ast>, Error> {
         if self.is_eof() {
             return Err(Error::ExpectedExpr {
                 found: self.current().kind.clone(),
@@ -600,7 +615,7 @@ impl<'a> Parser<'a> {
         self.binary_expr(0)
     }
 
-    fn binary_expr(&mut self, min_precedence: u8) -> Result<Expr, Error> {
+    fn binary_expr(&mut self, min_precedence: u8) -> Result<&'ast Expr<'ast>, Error> {
         let mut lhs = self.unary_expr()?;
 
         loop {
@@ -620,36 +635,36 @@ impl<'a> Parser<'a> {
                 self.consume();
                 if op == BinaryOp::Dot {
                     let key = self.key()?;
-                    lhs = Expr::StructAccess {
+                    lhs = self.bump.alloc(Expr::StructAccess {
                         span: lhs.span().start..key.span.end,
-                        expr: Box::new(lhs),
+                        expr: lhs,
                         ident: key,
-                    };
+                    });
                     continue;
                 }
 
                 let rhs = self.binary_expr(op_precedence + 1)?;
-                lhs = Expr::Binary {
+                lhs = self.bump.alloc(Expr::Binary {
                     op,
                     span: rhs.span().start..rhs.span().end,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                };
+                    lhs,
+                    rhs,
+                });
                 continue;
             }
 
             let rhs = self.binary_expr(op_precedence + 1)?;
-            lhs = Expr::App {
+            lhs = self.bump.alloc(Expr::App {
                 span: rhs.span().start..rhs.span().end,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            };
+                lhs,
+                rhs,
+            });
         }
 
         Ok(lhs)
     }
 
-    fn unary_expr(&mut self) -> Result<Expr, Error> {
+    fn unary_expr(&mut self) -> Result<&'ast Expr<'ast>, Error> {
         if self.check(&TokenKind::If) {
             return self.if_expr();
         }
@@ -657,16 +672,12 @@ impl<'a> Parser<'a> {
             let op_token = self.consume();
             let expr = self.unary_expr()?;
             let span = op_token.span.start..expr.span().end;
-            return Ok(Expr::Unary {
-                op,
-                expr: Box::new(expr),
-                span,
-            });
+            return Ok(self.bump.alloc(Expr::Unary { op, expr, span }));
         }
         self.atom()
     }
 
-    fn struct_def(&mut self) -> Result<untyped::StructDef, Error> {
+    fn struct_def(&mut self) -> Result<untyped::StructDef<'ast>, Error> {
         let start_span = self.expect(TokenKind::Struct)?.span;
         let name_token = self.expect(TokenKind::TypeIdent)?;
         let name_ident = untyped::TypeIdent {
@@ -676,7 +687,7 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::BraceL)?;
 
-        let mut fields = Vec::new();
+        let mut fields = Vec::new_in(self.bump);
         while !self.check(&TokenKind::BraceR) {
             fields.push(self.struct_field()?);
             if self.check_consume(&TokenKind::Comma).is_none() && !self.check(&TokenKind::BraceR) {

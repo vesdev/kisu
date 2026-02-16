@@ -1,4 +1,5 @@
 use crate::{lexer::TokenKind, types::Type};
+use bumpalo::collections::Vec;
 use logos::Span;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14,16 +15,16 @@ pub struct TypeIdent {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Binding {
+pub struct Binding<'ast> {
     pub kind: BindingKind,
     pub ident: Ident,
     pub constraint: Option<Type>,
-    pub expr: Box<Expr>,
+    pub expr: &'ast Expr<'ast>,
     pub span: Span,
 }
 
-impl Binding {
-    pub fn new(ident: Ident, constraint: Option<Type>, expr: Box<Expr>, span: Span) -> Self {
+impl<'ast> Binding<'ast> {
+    pub fn new(ident: Ident, constraint: Option<Type>, expr: &'ast Expr<'ast>, span: Span) -> Self {
         Self {
             kind: BindingKind::Normal,
             ident,
@@ -41,10 +42,10 @@ pub enum BindingKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Param {
+pub struct Param<'ast> {
     pub ident: Ident,
     pub constraint: Option<Type>,
-    pub expr: Option<Box<Expr>>,
+    pub expr: Option<&'ast Expr<'ast>>,
     pub span: Span,
 }
 
@@ -56,16 +57,16 @@ pub struct StructField {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct StructDef {
+pub struct StructDef<'ast> {
     pub name: TypeIdent,
-    pub fields: Vec<StructField>,
+    pub fields: Vec<'ast, StructField>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Program {
-    pub structs: Vec<StructDef>,
-    pub expr: Expr,
+pub struct Program<'ast> {
+    pub structs: Vec<'ast, StructDef<'ast>>,
+    pub expr: Expr<'ast>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,64 +76,64 @@ pub struct Str(pub String, pub Span);
 pub struct Num(pub f64, pub Span);
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct List {
-    pub exprs: Vec<Expr>,
+pub struct List<'ast> {
+    pub exprs: Vec<'ast, Expr<'ast>>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum Expr<'ast> {
     Number(Num),
     String(Str),
     Bool(bool),
-    List(List),
+    List(List<'ast>),
     Ident(Ident),
     TypeIdent(TypeIdent),
     Unary {
         op: UnaryOp,
-        expr: Box<Expr>,
+        expr: &'ast Expr<'ast>,
         span: Span,
     },
     Binary {
         op: BinaryOp,
-        lhs: Box<Expr>,
-        rhs: Box<Expr>,
+        lhs: &'ast Expr<'ast>,
+        rhs: &'ast Expr<'ast>,
         span: Span,
     },
     StructAccess {
-        expr: Box<Expr>,
+        expr: &'ast Expr<'ast>,
         ident: Ident,
         span: Span,
     },
     Lambda {
-        params: Vec<Param>,
-        body: Box<Expr>,
+        params: Vec<'ast, Param<'ast>>,
+        body: &'ast Expr<'ast>,
         span: Span,
     },
     Block {
-        bindings: Vec<Binding>,
-        expr: Box<Expr>,
+        bindings: Vec<'ast, Binding<'ast>>,
+        expr: &'ast Expr<'ast>,
         span: Span,
     },
     Struct {
         type_name: TypeIdent,
-        fields: Vec<Binding>,
+        fields: Vec<'ast, Binding<'ast>>,
         span: Span,
     },
     App {
-        lhs: Box<Expr>,
-        rhs: Box<Expr>,
+        lhs: &'ast Expr<'ast>,
+        rhs: &'ast Expr<'ast>,
         span: Span,
     },
     IfExpr {
-        cond: Box<Expr>,
-        then_expr: Box<Expr>,
-        else_expr: Box<Expr>,
+        cond: &'ast Expr<'ast>,
+        then_expr: &'ast Expr<'ast>,
+        else_expr: &'ast Expr<'ast>,
         span: Span,
     },
 }
 
-impl Expr {
+impl<'ast> Expr<'ast> {
     pub fn span(&self) -> Span {
         match self {
             Expr::Number(n) => n.1.clone(),
@@ -209,14 +210,14 @@ impl BinaryOp {
 pub trait Visitor<'ast>: Sized {
     type Err;
 
-    fn visit_program(&mut self, program: &'ast Program) -> Result<(), Self::Err> {
+    fn visit_program(&mut self, program: &'ast Program<'ast>) -> Result<(), Self::Err> {
         for s in &program.structs {
             self.visit_struct_def(s)?;
         }
         self.visit_expr(&program.expr)
     }
 
-    fn visit_expr(&mut self, expr: &'ast Expr) -> Result<(), Self::Err> {
+    fn visit_expr(&mut self, expr: &'ast Expr<'ast>) -> Result<(), Self::Err> {
         match expr {
             Expr::Number(n) => self.visit_num(n),
             Expr::String(s) => self.visit_str(s),
@@ -262,41 +263,49 @@ pub trait Visitor<'ast>: Sized {
     }
 
     fn visit_ident(&mut self, ident: &'ast Ident) -> Result<(), Self::Err>;
-    fn visit_bind(&mut self, bind: &'ast Binding) -> Result<(), Self::Err>;
+    fn visit_bind(&mut self, bind: &'ast Binding<'ast>) -> Result<(), Self::Err>;
     fn visit_num(&mut self, num: &'ast Num) -> Result<(), Self::Err>;
     fn visit_str(&mut self, str: &'ast Str) -> Result<(), Self::Err>;
     fn visit_bool(&mut self, b: bool) -> Result<(), Self::Err>;
-    fn visit_unary_op(&mut self, op: &'ast UnaryOp, expr: &'ast Expr) -> Result<(), Self::Err>;
+    fn visit_unary_op(
+        &mut self,
+        op: &'ast UnaryOp,
+        expr: &'ast Expr<'ast>,
+    ) -> Result<(), Self::Err>;
     fn visit_binary_op(
         &mut self,
         op: &'ast BinaryOp,
-        lhs: &'ast Expr,
-        rhs: &'ast Expr,
+        lhs: &'ast Expr<'ast>,
+        rhs: &'ast Expr<'ast>,
     ) -> Result<(), Self::Err>;
     fn visit_struct_expr(
         &mut self,
         type_name: &'ast TypeIdent,
-        fields: &'ast [Binding],
+        fields: &'ast [Binding<'ast>],
     ) -> Result<(), Self::Err>;
-    fn visit_struct_def(&mut self, struct_def: &'ast StructDef) -> Result<(), Self::Err>;
+    fn visit_struct_def(&mut self, struct_def: &'ast StructDef<'ast>) -> Result<(), Self::Err>;
     fn visit_block_expr(
         &mut self,
-        bindings: &'ast [Binding],
-        expr: &'ast Expr,
+        bindings: &'ast [Binding<'ast>],
+        expr: &'ast Expr<'ast>,
     ) -> Result<(), Self::Err>;
-    fn visit_app(&mut self, lhs: &'ast Expr, rhs: &'ast Expr) -> Result<(), Self::Err>;
-    fn visit_lambda(&mut self, params: &'ast [Param], body: &'ast Expr) -> Result<(), Self::Err>;
-    fn visit_list(&mut self, list: &'ast List) -> Result<(), Self::Err>;
+    fn visit_app(&mut self, lhs: &'ast Expr<'ast>, rhs: &'ast Expr<'ast>) -> Result<(), Self::Err>;
+    fn visit_lambda(
+        &mut self,
+        params: &'ast [Param<'ast>],
+        body: &'ast Expr<'ast>,
+    ) -> Result<(), Self::Err>;
+    fn visit_list(&mut self, list: &'ast List<'ast>) -> Result<(), Self::Err>;
     fn visit_struct_access(
         &mut self,
-        expr: &'ast Expr,
+        expr: &'ast Expr<'ast>,
         ident: &'ast Ident,
     ) -> Result<(), Self::Err>;
     fn visit_if_expr(
         &mut self,
-        cond: &'ast Expr,
-        then_expr: &'ast Expr,
-        else_expr: &'ast Expr,
+        cond: &'ast Expr<'ast>,
+        then_expr: &'ast Expr<'ast>,
+        else_expr: &'ast Expr<'ast>,
     ) -> Result<(), Self::Err>;
     fn visit_type(&mut self, ty: &'ast Type) -> Result<(), Self::Err>;
 }
