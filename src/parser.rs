@@ -4,7 +4,6 @@ use crate::types::Type;
 use bumpalo::Bump;
 use bumpalo::collections::Vec;
 use logos::Span;
-use std::collections::VecDeque;
 
 pub use _hide_warnings::*;
 
@@ -72,7 +71,8 @@ mod _hide_warnings {
 pub struct Parser<'src, 'ast> {
     source: &'src str,
     lexer: TokenIter<'src>,
-    buffer: VecDeque<Token>,
+    current_token: Token,
+    next_token: Token,
     bump: &'ast Bump,
 }
 
@@ -81,32 +81,14 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         let mut parser = Self {
             source,
             lexer,
-            buffer: VecDeque::with_capacity(3),
+            current_token: Token::NONE,
+            next_token: Token::NONE,
             bump,
         };
-        parser.fill_buffer();
+
+        parser.advance();
+        parser.advance();
         parser
-    }
-
-    fn fill_buffer(&mut self) {
-        while self.buffer.len() < self.buffer.capacity() {
-            let eof_span = if let Some(last_token) = self.buffer.back() {
-                last_token.span.clone()
-            } else {
-                0..0
-            };
-
-            match self.lexer.next() {
-                Some(token) => self.buffer.push_back(token),
-                None => {
-                    if self.buffer.is_empty() || self.buffer.back().unwrap().kind != TokenKind::Eof
-                    {
-                        self.buffer.push_back(Token::new(TokenKind::Eof, eof_span));
-                    }
-                    break;
-                }
-            }
-        }
     }
 
     pub fn parse(&mut self) -> Result<untyped::Program<'ast>, Error> {
@@ -123,46 +105,32 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     #[inline]
-    fn current_token(&self) -> &Token {
-        self.buffer.front().unwrap_or(&Token::NONE)
-    }
-
-    #[inline]
-    fn next_token(&self) -> &Token {
-        self.buffer.get(1).unwrap_or(&Token::NONE)
-    }
-
-    #[inline]
     fn advance(&mut self) {
-        self.buffer.pop_front();
-        self.fill_buffer();
+        std::mem::swap(&mut self.next_token, &mut self.current_token);
+        self.next_token = self.lexer.next().unwrap_or(Token {
+            kind: TokenKind::Eof,
+            span: self.token_span().clone(),
+        });
     }
 
     #[inline]
     pub fn current(&self) -> &Token {
-        self.current_token()
+        &self.current_token
     }
 
     #[inline]
     pub fn next(&self) -> &Token {
-        self.next_token()
+        &self.next_token
     }
 
     #[inline]
     pub fn check(&self, kind: &crate::lexer::TokenKind) -> bool {
-        &self.current_token().kind == kind
+        &self.current_token.kind == kind
     }
 
     #[inline]
     pub fn check_next(&self, kind: &crate::lexer::TokenKind) -> bool {
-        &self.next_token().kind == kind
-    }
-
-    #[inline]
-    pub fn check_next_nth(&self, n: usize, expected_kind: &TokenKind) -> bool {
-        self.buffer
-            .get(n)
-            .is_some_and(|token| &token.kind == expected_kind)
+        &self.next_token.kind == kind
     }
 
     pub fn check_consume(&mut self, kind: &crate::lexer::TokenKind) -> Option<Token> {
@@ -174,25 +142,31 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         }
     }
 
+    #[inline]
     pub fn consume(&mut self) -> Token {
-        let token = self.buffer.pop_front().unwrap_or(Token::NONE);
-        self.fill_buffer();
+        let mut token = Token::NONE;
+        std::mem::swap(&mut token, &mut self.current_token);
+        std::mem::swap(&mut self.next_token, &mut self.current_token);
+        self.next_token = self.lexer.next().unwrap_or(Token {
+            kind: TokenKind::Eof,
+            span: self.token_span().clone(),
+        });
         token
     }
 
     #[inline]
     pub fn is_eof(&self) -> bool {
-        self.current_token().kind == TokenKind::Eof && self.next_token().kind == TokenKind::Eof
+        self.current().kind == TokenKind::Eof && self.next().kind == TokenKind::Eof
     }
 
     #[inline]
     fn token_kind(&self) -> &TokenKind {
-        &self.current_token().kind
+        &self.current().kind
     }
 
     #[inline]
     fn token_span(&self) -> &Span {
-        &self.current_token().span
+        &self.current().span
     }
 
     fn binary_op(&self) -> Option<BinaryOp> {
@@ -336,10 +310,10 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     fn expect_eof(&mut self) -> Result<(), Error> {
-        if self.current_token().kind == TokenKind::Eof {
+        if self.current().kind == TokenKind::Eof {
             Ok(())
         } else {
-            let token = self.current_token();
+            let token = self.current();
             Err(Error::ExpectedEof {
                 found: token.kind.clone(),
                 span: token.span.clone().into(),
@@ -397,7 +371,6 @@ impl<'src, 'ast> Parser<'src, 'ast> {
         if !top_level {
             start = self.expect(TokenKind::ParenL)?.span.end;
         }
-        use bumpalo::collections::Vec;
 
         let mut bindings = Vec::new_in(self.bump);
 
@@ -405,10 +378,7 @@ impl<'src, 'ast> Parser<'src, 'ast> {
             let is_normal = self.check_key()
                 && (self.check_next(&TokenKind::Assign) || self.check_next(&TokenKind::Colon));
 
-            let is_rec = self.check(&TokenKind::Rec)
-                && self.check_next(&TokenKind::Ident)
-                && (self.check_next_nth(2, &TokenKind::Assign)
-                    || self.check_next_nth(2, &TokenKind::Colon));
+            let is_rec = self.check(&TokenKind::Rec);
 
             is_normal || is_rec
         } {
@@ -678,11 +648,11 @@ impl<'src, 'ast> Parser<'src, 'ast> {
     }
 
     fn struct_def(&mut self) -> Result<untyped::StructDef<'ast>, Error> {
-        let start_span = self.expect(TokenKind::Struct)?.span;
-        let name_token = self.expect(TokenKind::TypeIdent)?;
-        let name_ident = untyped::TypeIdent {
-            name: self.source[name_token.span.start..name_token.span.end].to_string(),
-            span: name_token.span,
+        let start = self.expect(TokenKind::Struct)?.span.start;
+        let ident = self.expect(TokenKind::TypeIdent)?;
+        let name = untyped::TypeIdent {
+            name: self.source[ident.span.start..ident.span.end].to_string(),
+            span: ident.span,
         };
 
         self.expect(TokenKind::BraceL)?;
@@ -698,12 +668,12 @@ impl<'src, 'ast> Parser<'src, 'ast> {
                 });
             }
         }
-        let end_span = self.expect(TokenKind::BraceR)?.span;
+        let end = self.expect(TokenKind::BraceR)?.span.end;
 
         Ok(untyped::StructDef {
-            name: name_ident,
+            name,
             fields,
-            span: start_span.start..end_span.end,
+            span: start..end,
         })
     }
 
