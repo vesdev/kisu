@@ -12,12 +12,32 @@ pub mod types;
 #[cfg(feature = "serde")]
 pub use serialize::de::from_str;
 
-use crate::target::eval::Value;
+#[cfg(feature = "impure")]
+pub use crate::target::eval::NativeFn;
+
+pub use crate::target::eval::Value;
+pub use crate::types::Type;
+
+#[cfg(feature = "impure")]
+use std::collections::HashMap;
+#[cfg(feature = "impure")]
+use std::rc::Rc;
 
 /// run kisu program with pretty printed errors
 pub fn run(source: &str) -> Result<Value, miette::Error> {
     let source = String::from(source);
     eval(&source).map_err(|error| miette::Error::new(error).with_source_code(source))
+}
+
+/// run kisu program with pretty printed errors and custom native functions
+#[cfg(feature = "impure")]
+pub fn run_with_native_functions(
+    source: &str,
+    native_functions: HashMap<String, NativeFn>,
+) -> Result<Value, miette::Error> {
+    let source = String::from(source);
+    eval_with_native_functions(&source, native_functions)
+        .map_err(|error| miette::Error::new(error).with_source_code(source))
 }
 
 /// run kisu program with internal error type
@@ -43,6 +63,58 @@ pub fn eval(source: &str) -> Result<Value, Error> {
         use crate::ast::typed::Visitor;
         use crate::target::eval::TreeWalker;
         let mut walker = TreeWalker::default();
+        walker.visit_program(&typed_ast);
+        walker.consume()
+    };
+
+    Ok(result)
+}
+
+/// run kisu program with internal error type and custom native functions
+#[cfg(feature = "impure")]
+pub fn eval_with_native_functions(
+    source: &str,
+    native_functions: HashMap<String, NativeFn>,
+) -> Result<Value, Error> {
+    let bump = Bump::new();
+
+    let ast = {
+        use crate::{lexer::TokenIter, parser::Parser};
+        let lexer = Lexer::new(source);
+        let mut parser = Parser::new(TokenIter::from(lexer), source, &bump);
+        parser.parse()?
+    };
+
+    let native_types: HashMap<String, Type> = native_functions
+        .iter()
+        .map(|(name, native_fn)| {
+            (
+                name.clone(),
+                Type::Lambda(
+                    Box::new(native_fn.arg_ty.clone()),
+                    Box::new(native_fn.ret_ty.clone()),
+                ),
+            )
+        })
+        .collect();
+
+    let typed_ast = {
+        use crate::ast::untyped::Visitor;
+        use crate::types::TypeChecker;
+        let mut checker = TypeChecker::new_with_native(native_types);
+        checker.visit_program(&ast)?;
+        checker.consume()?
+    };
+
+    let native_fns: HashMap<String, Value> = native_functions
+        .into_iter()
+        .map(|(name, native_fn)| (name, Value::NativeFn(Rc::new(native_fn))))
+        .collect();
+
+    let result = unsafe {
+        use crate::ast::typed::Visitor;
+        use crate::target::eval::TreeWalker;
+        let mut walker = TreeWalker::new(native_fns);
         walker.visit_program(&typed_ast);
         walker.consume()
     };

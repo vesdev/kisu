@@ -85,6 +85,15 @@ pub struct TypeChecker {
 }
 
 impl TypeChecker {
+    pub fn new_with_native(native_types: HashMap<String, Type>) -> Self {
+        let mut checker = TypeChecker::default();
+        for (name, ty) in native_types {
+            let scheme = checker.generalize(&checker.scope, &ty);
+            checker.scope.extend(name, scheme);
+        }
+        checker
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         subst: HashMap<u32, Type>,

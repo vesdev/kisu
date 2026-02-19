@@ -7,6 +7,23 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+pub struct NativeFn {
+    pub name: String,
+    pub fun: Box<dyn Fn(Value) -> Value + 'static>,
+    pub arg_ty: Type,
+    pub ret_ty: Type,
+}
+
+impl std::fmt::Debug for NativeFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeFn")
+            .field("name", &self.name)
+            .field("arg_ty", &self.arg_ty)
+            .field("ret_ty", &self.ret_ty)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Thunk {
     expr: Box<typed::Expr>,
@@ -54,6 +71,7 @@ pub enum Value {
     Thunk(Rc<Thunk>),
     Unit,
     RecThunk(Rc<RefCell<Option<Rc<Thunk>>>>),
+    NativeFn(Rc<NativeFn>),
 }
 
 impl PartialEq for Value {
@@ -78,6 +96,9 @@ impl PartialEq for Value {
             (Value::Unit, Value::Unit) => true,
             (Value::Thunk(l), Value::Thunk(r)) => Rc::ptr_eq(l, r),
             (Value::RecThunk(l), Value::RecThunk(r)) => Rc::ptr_eq(l, r),
+            (Value::NativeFn(l), Value::NativeFn(r)) => {
+                l.name == r.name && l.arg_ty == r.arg_ty && l.ret_ty == r.ret_ty
+            }
             _ => false,
         }
     }
@@ -100,6 +121,14 @@ impl Scope {
             vars: self.vars.insert(key, value),
         }
     }
+
+    pub fn new(bindings: HashMap<String, Value>) -> Self {
+        let mut vars = HashTrieMap::new();
+        for (name, value) in bindings {
+            vars = vars.insert(name, value);
+        }
+        Self { vars }
+    }
 }
 
 pub struct TreeWalker {
@@ -111,6 +140,16 @@ impl Default for TreeWalker {
     fn default() -> Self {
         Self {
             call_stack: vec![Scope::default()],
+            stack: Default::default(),
+        }
+    }
+}
+
+impl TreeWalker {
+    pub fn new(bindings: HashMap<String, Value>) -> Self {
+        let initial_scope = Scope::new(bindings);
+        Self {
+            call_stack: vec![initial_scope],
             stack: Default::default(),
         }
     }
@@ -413,6 +452,10 @@ impl<'ast> typed::Visitor<'ast> for TreeWalker {
                         self.scope_pop();
                         final_result
                     }
+                }
+                Value::NativeFn(native_fn) => {
+                    let arg_forced = self.force(arg_val);
+                    (native_fn.fun)(arg_forced)
                 }
                 _ => {
                     unreachable!();

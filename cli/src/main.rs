@@ -1,6 +1,7 @@
 use indicatif::{ProgressBar, ProgressStyle};
+use kisu::{Type, Value, target::eval::NativeFn};
 use miette::Result;
-use std::{path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use argh::FromArgs;
 
@@ -12,6 +13,25 @@ struct Args {
 
     #[argh(option, description = "kisu code", short = 'c')]
     code: Option<String>,
+}
+
+fn builtins() -> HashMap<String, NativeFn> {
+    let mut builtins = HashMap::new();
+    builtins.insert(
+        "print".into(),
+        NativeFn {
+            name: "print".into(),
+            fun: Box::new(|val| {
+                if let Value::String(s) = val {
+                    println!("{s}");
+                }
+                Value::Bool(true)
+            }),
+            arg_ty: Type::String,
+            ret_ty: Type::Bool,
+        },
+    );
+    builtins
 }
 
 fn main() -> Result<()> {
@@ -38,6 +58,6 @@ fn run(source: &str) {
             .tick_strings(&["⢎ ", "⠎⠁", "⠊⠑", "⠈⠱", " ⡱", "⢀⡰", "⢄⡠", "⢆⡀", ""]),
     );
     pb.set_message("Running kisu...");
-    let result = kisu::run(source);
+    let result = kisu::run_with_native_functions(source, builtins());
     pb.finish_with_message(format!("{result:?}"));
 }
