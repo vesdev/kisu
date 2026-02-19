@@ -133,35 +133,37 @@ impl TypeChecker {
         }
     }
 
-    fn unify(&mut self, t1: &Type, t2: &Type, span: SourceSpan) -> Result<(), Error> {
+    fn unify(&mut self, t1: &Type, t2: &Type, span: SourceSpan) -> Result<Type, Error> {
         let t1 = self.apply(t1);
         let t2 = self.apply(t2);
 
         if t1 == t2 {
-            return Ok(());
+            return Ok(t1);
         }
 
         if let Type::Var(id) = t1 {
-            return self.unify_var(id, &t2, span);
+            self.unify_var(id, &t2, span)?;
+            return Ok(t2);
         }
 
         if let Type::Var(id) = t2 {
-            return self.unify_var(id, &t1, span);
+            self.unify_var(id, &t1, span)?;
+            return Ok(t1);
         }
 
         match (&t1, &t2) {
-            (Type::Lambda(arg1, ret1), Type::Lambda(arg2, ret2)) => {
-                self.unify(arg1, arg2, span)?;
-                self.unify(ret1, ret2, span)?;
-                Ok(())
+            (Type::Lambda(arg, ret), Type::Lambda(arg2, ret2)) => {
+                let arg_ty = self.unify(arg, arg2, span)?;
+                let ret_ty = self.unify(ret, ret2, span)?;
+                Ok(Type::Lambda(Box::new(arg_ty), Box::new(ret_ty)))
             }
             (Type::List(t1), Type::List(t2)) => {
-                self.unify(t1, t2, span)?;
-                Ok(())
+                let ty = self.unify(t1, t2, span)?;
+                Ok(Type::List(Box::new(ty)))
             }
-            (Type::Struct(ident1), Type::Struct(ident2)) => {
-                if ident1.name == ident2.name {
-                    Ok(())
+            (Type::Struct(ident), Type::Struct(ident2)) => {
+                if ident.name == ident2.name {
+                    Ok(t1)
                 } else {
                     Err(Error::UnexpectedType {
                         t1: t1.to_string(),
@@ -180,7 +182,8 @@ impl TypeChecker {
 
     fn unify_var(&mut self, id: u32, ty: &Type, span: SourceSpan) -> Result<(), Error> {
         if let Some(t) = self.subst.get(&id).cloned() {
-            return self.unify(&t, ty, span);
+            self.unify(&t, ty, span)?;
+            return Ok(());
         }
         if self.occurs(id, ty) {
             return Err(Error::InfiniteType { span });
@@ -344,18 +347,15 @@ impl<'ast> Visitor<'ast> for TypeChecker {
             let ty_expr = checker.last_expr.take().unwrap();
             let inferred_ty = ty_expr.ty.clone();
 
-            checker.unify(&tv, &inferred_ty, bind.ident.span.clone().into())?;
-
-            let ty = checker.apply(&tv);
+            let unified_ty = self.unify(&tv, &inferred_ty, bind.ident.span.clone().into())?;
 
             self.subst = checker.subst;
             self.count = checker.count;
 
             let ty = if let Some(constraint) = &bind.constraint {
-                self.unify(&ty, constraint, bind.ident.span.clone().into())?;
-                constraint.clone()
+                self.unify(&unified_ty, constraint, bind.ident.span.clone().into())?
             } else {
-                ty
+                unified_ty
             };
 
             let scheme = self.generalize(&self.scope, &ty);
@@ -389,8 +389,7 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         self.count = checker.count;
 
         let ty = if let Some(constraint) = &bind.constraint {
-            self.unify(&inferred_ty, constraint, bind.ident.span.clone().into())?;
-            constraint.clone()
+            self.unify(&inferred_ty, constraint, bind.ident.span.clone().into())?
         } else {
             inferred_ty
         };
@@ -462,20 +461,20 @@ impl<'ast> Visitor<'ast> for TypeChecker {
 
         let inferred_ty = match op {
             UnaryOp::Neg => {
-                self.unify(
+                let ty = self.unify(
                     &ty_expr.ty,
                     &Type::Number,
                     (ty_expr.span.start..expr.span().end).into(),
                 )?;
-                Ok(Type::Number)
+                Ok(ty)
             }
             UnaryOp::Not => {
-                self.unify(
+                let ty = self.unify(
                     &ty_expr.ty,
                     &Type::Bool,
                     (ty_expr.span.start..expr.span().end).into(),
                 )?;
-                Ok(Type::Bool)
+                Ok(ty)
             }
         }?;
 
@@ -504,26 +503,29 @@ impl<'ast> Visitor<'ast> for TypeChecker {
         self.visit_expr(rhs)?;
         let ty_rhs = self.last_expr.take().unwrap();
 
-        let lhs_ty = ty_lhs.ty.clone();
-        let rhs_ty = ty_rhs.ty.clone();
-
         let span: SourceSpan = (lhs.span().start..rhs.span().end).into();
-        let inferred_ty = match op {
+
+        let operand_ty: Type;
+        let result_ty: Type;
+        match op {
             BinaryOp::Add => {
-                if lhs_ty == Type::String || rhs_ty == Type::String {
-                    self.unify(&lhs_ty, &Type::String, span)?;
-                    self.unify(&rhs_ty, &Type::String, span)?;
-                    Ok(Type::String)
+                if ty_lhs.ty == Type::String || ty_rhs.ty == Type::String {
+                    self.unify(&ty_lhs.ty, &Type::String, span)?;
+                    self.unify(&ty_rhs.ty, &Type::String, span)?;
+                    operand_ty = Type::String;
+                    result_ty = Type::String;
                 } else {
-                    self.unify(&lhs_ty, &Type::Number, span)?;
-                    self.unify(&rhs_ty, &Type::Number, span)?;
-                    Ok(Type::Number)
+                    self.unify(&ty_lhs.ty, &Type::Number, span)?;
+                    self.unify(&ty_rhs.ty, &Type::Number, span)?;
+                    operand_ty = Type::Number;
+                    result_ty = Type::Number;
                 }
             }
             BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                self.unify(&lhs_ty, &Type::Number, span)?;
-                self.unify(&rhs_ty, &Type::Number, span)?;
-                Ok(Type::Number)
+                self.unify(&ty_lhs.ty, &Type::Number, span)?;
+                self.unify(&ty_rhs.ty, &Type::Number, span)?;
+                operand_ty = Type::Number;
+                result_ty = Type::Number;
             }
             BinaryOp::Eq
             | BinaryOp::NotEq
@@ -531,13 +533,13 @@ impl<'ast> Visitor<'ast> for TypeChecker {
             | BinaryOp::Gt
             | BinaryOp::LtEq
             | BinaryOp::GtEq => {
-                self.unify(&lhs_ty, &rhs_ty, span)?;
-                Ok(Type::Bool)
+                operand_ty = self.unify(&ty_lhs.ty, &ty_rhs.ty, span)?;
+                result_ty = Type::Bool;
             }
             BinaryOp::Dot => {
                 unreachable!();
             }
-        }?;
+        }
 
         self.last_expr = Some(typed::Expr {
             kind: Box::new(typed::ExprKind::Binary {
@@ -552,13 +554,14 @@ impl<'ast> Visitor<'ast> for TypeChecker {
                     untyped::BinaryOp::Gt => typed::BinaryOp::Gt,
                     untyped::BinaryOp::LtEq => typed::BinaryOp::LtEq,
                     untyped::BinaryOp::GtEq => typed::BinaryOp::GtEq,
-                    untyped::BinaryOp::Dot => typed::BinaryOp::Dot,
+                    untyped::BinaryOp::Dot => unreachable!(),
                 },
                 lhs: ty_lhs,
                 rhs: ty_rhs,
+                ty: operand_ty,
             }),
             span: (lhs.span().start..rhs.span().end),
-            ty: inferred_ty,
+            ty: result_ty,
         });
         Ok(())
     }

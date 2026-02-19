@@ -4,7 +4,7 @@ use std::rc::Rc;
 use miette::Diagnostic;
 use serde::de::{self, DeserializeOwned, IntoDeserializer, Visitor};
 
-use crate::{eval::Value, run};
+use crate::{run, target::eval::Value};
 
 pub fn from_str<T>(source: &str) -> Result<T, miette::Error>
 where

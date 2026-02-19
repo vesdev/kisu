@@ -39,7 +39,7 @@ pub fn eval(source: &str) -> Result<Value, Error> {
         checker.consume()?
     };
 
-    let result = {
+    let result = unsafe {
         use crate::ast::typed::Visitor;
         use crate::target::eval::TreeWalker;
         let mut walker = TreeWalker::default();
